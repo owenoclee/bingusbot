@@ -40,6 +40,7 @@ if (tools.length > 0) {
 }
 
 const DEFAULT_CONVERSATION = "default";
+const WAKE_QUIET_PERIOD_MS = 2 * 60 * 1000; // 2 minutes
 
 // --- Wake scheduling ---
 
@@ -49,6 +50,8 @@ interface WakeSchedule {
 }
 
 let wakeTimer: ReturnType<typeof setTimeout> | null = null;
+let lastActivityMs = 0; // timestamp of last user message or agent reply
+let replying = false;
 
 async function loadWakeSchedule(): Promise<WakeSchedule | null> {
   try {
@@ -77,20 +80,32 @@ function scheduleWake(): void {
     if (!schedule) return;
 
     const wakeAt = new Date(schedule.wakeAt).getTime();
-    const delay = wakeAt - Date.now();
+    const delay = Math.max(0, wakeAt - Date.now());
 
-    if (delay <= 0) {
-      // Already past — wake immediately
-      console.log(`[wake] overdue, waking now: ${schedule.reason}`);
+    // Ensure we don't fire during or immediately after a conversation.
+    // If the wake time has passed but conversation is recent, defer until
+    // the quiet period elapses.
+    const quietUntil = lastActivityMs + WAKE_QUIET_PERIOD_MS;
+    const effectiveDelay = Math.max(delay, quietUntil - Date.now());
+
+    if (effectiveDelay <= 0) {
+      console.log(`[wake] firing now: ${schedule.reason}`);
       wake(schedule.reason);
       return;
     }
 
-    console.log(`[wake] scheduled in ${Math.round(delay / 60000)}m: ${schedule.reason}`);
+    console.log(`[wake] scheduled in ${Math.round(effectiveDelay / 60000)}m: ${schedule.reason}`);
     wakeTimer = setTimeout(() => {
       wakeTimer = null;
+      // Re-check quiet period — new activity may have happened while we waited
+      const sinceLastActivity = Date.now() - lastActivityMs;
+      if (replying || sinceLastActivity < WAKE_QUIET_PERIOD_MS) {
+        console.log(`[wake] conversation active, deferring`);
+        scheduleWake(); // re-schedule, will defer again
+        return;
+      }
       wake(schedule.reason);
-    }, delay);
+    }, effectiveDelay);
   });
 }
 
@@ -102,10 +117,14 @@ async function wake(reason: string): Promise<void> {
   await server.sendSystemMessage(DEFAULT_CONVERSATION, systemText);
 
   try {
+    replying = true;
     await reply(DEFAULT_CONVERSATION, systemText);
   } catch (err) {
     console.error("wake reply error:", err);
     await server.sendMessage(DEFAULT_CONVERSATION, "(error during wake)");
+  } finally {
+    replying = false;
+    lastActivityMs = Date.now();
   }
 
   // Agent may have scheduled a new wake during its response
@@ -249,11 +268,16 @@ async function reply(conversationId: string, userText: string) {
 // Wire up the message handler
 server.onUserMessage(async (msg) => {
   console.log(`[user] ${msg.text}`);
+  lastActivityMs = Date.now();
+  replying = true;
   try {
     await reply(msg.conversationId, msg.text);
   } catch (err) {
     console.error("reply error:", err);
     await server.sendMessage(msg.conversationId, "(error processing message)");
+  } finally {
+    replying = false;
+    lastActivityMs = Date.now();
   }
   // Agent may have scheduled a wake during its response
   scheduleWake();
