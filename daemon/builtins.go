@@ -267,7 +267,7 @@ func entryMatchesText(entry map[string]any, textLower string) bool {
 // --- wake functions ---
 
 // wakeSet validates and writes a wake schedule to ~/.bingus/wake.json.
-// Guard rails: minimum 5 minutes, maximum 7 days in the future.
+// Guard rails: minimum 1 minute, maximum 7 days in the future.
 func wakeSet(isoTime string, reason string) (string, error) {
 	t, err := time.Parse(time.RFC3339, isoTime)
 	if err != nil {
@@ -277,8 +277,8 @@ func wakeSet(isoTime string, reason string) (string, error) {
 	now := time.Now().UTC()
 	diff := t.Sub(now)
 
-	if diff < 5*time.Minute {
-		return "", fmt.Errorf("wake time must be at least 5 minutes in the future (got %v)", diff.Round(time.Second))
+	if diff < 1*time.Minute {
+		return "", fmt.Errorf("wake time must be at least 1 minute in the future (got %v)", diff.Round(time.Second))
 	}
 	if diff > 7*24*time.Hour {
 		return "", fmt.Errorf("wake time must be at most 7 days in the future (got %v)", diff.Round(time.Hour))

@@ -40,7 +40,7 @@ if (tools.length > 0) {
 }
 
 const DEFAULT_CONVERSATION = "default";
-const WAKE_QUIET_PERIOD_MS = 2 * 60 * 1000; // 2 minutes
+const WAKE_QUIET_PERIOD_MS = 30 * 1000; // 30 seconds
 
 // --- Wake scheduling ---
 
