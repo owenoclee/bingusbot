@@ -152,10 +152,10 @@ func makeLogAppend(namespace string) func(data any) (string, error) {
 }
 
 // makeLogQuery returns a function that reads entries from a namespaced JSONL log.
-// Returns all entries since the given time boundary as a JSON array.
-// Filtering by domain-specific fields is left to the Lua tool.
-func makeLogQuery(namespace string) func(since string) (string, error) {
-	return func(since string) (string, error) {
+// Returns entries since the given time boundary as a JSON array. An optional text
+// parameter does case-insensitive substring matching across all string fields.
+func makeLogQuery(namespace string) func(since string, text string) (string, error) {
+	return func(since string, text string) (string, error) {
 		dir, err := logDir(namespace)
 		if err != nil {
 			return "", err
@@ -166,11 +166,12 @@ func makeLogQuery(namespace string) func(since string) (string, error) {
 			return "", err
 		}
 		cutoffMs := cutoff.UnixMilli()
+		textLower := strings.ToLower(text)
 
 		var entries []map[string]any
 		for d := cutoff; !d.After(time.Now().UTC()); d = d.AddDate(0, 0, 1) {
 			filename := filepath.Join(dir, d.Format("2006-01-02")+".jsonl")
-			dayEntries, err := readJSONLFile(filename, cutoffMs)
+			dayEntries, err := readJSONLFile(filename, cutoffMs, textLower)
 			if err != nil {
 				continue // file may not exist
 			}
@@ -214,8 +215,9 @@ func parseSince(since string) (time.Time, error) {
 	return t, nil
 }
 
-// readJSONLFile reads entries from a JSONL file, filtering by time cutoff.
-func readJSONLFile(path string, cutoffMs int64) ([]map[string]any, error) {
+// readJSONLFile reads entries from a JSONL file, filtering by time cutoff and
+// optional text search (case-insensitive substring match across string fields).
+func readJSONLFile(path string, cutoffMs int64, textLower string) ([]map[string]any, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -232,9 +234,34 @@ func readJSONLFile(path string, cutoffMs int64) ([]map[string]any, error) {
 		if ts, ok := entry["createdAt"].(float64); ok && int64(ts) < cutoffMs {
 			continue
 		}
+		if textLower != "" && !entryMatchesText(entry, textLower) {
+			continue
+		}
 		entries = append(entries, entry)
 	}
 	return entries, nil
+}
+
+// entryMatchesText checks if any string field (including inside arrays)
+// contains the search text (already lowercased).
+func entryMatchesText(entry map[string]any, textLower string) bool {
+	for _, v := range entry {
+		switch val := v.(type) {
+		case string:
+			if strings.Contains(strings.ToLower(val), textLower) {
+				return true
+			}
+		case []any:
+			for _, item := range val {
+				if s, ok := item.(string); ok {
+					if strings.Contains(strings.ToLower(s), textLower) {
+						return true
+					}
+				}
+			}
+		}
+	}
+	return false
 }
 
 // --- json functions ---

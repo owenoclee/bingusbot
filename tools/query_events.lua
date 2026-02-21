@@ -1,8 +1,8 @@
 tool = {
     name = "query_events",
     description = "Query logged events by time range, type, or tags. Use to review patterns, check habits, or recall past activities.",
-    parameters = [[{"type":"object","properties":{"since":{"type":"string","description":"Time range: '24h', '7d', '30d', or ISO 8601 timestamp. Default: '24h'"},"type":{"type":"string","description":"Filter by event type (meal, exercise, social, etc.)"},"tags":{"type":"string","description":"Filter by tags, comma-separated (event must have ALL listed tags)"},"limit":{"type":"integer","description":"Max events to return (default 50)"}}}]],
-    claims = {"log:events"}
+    parameters = [[{"type":"object","properties":{"since":{"type":"string","description":"Time range: '24h', '7d', '30d', or ISO 8601 timestamp. Default: '24h'"},"text":{"type":"string","description":"Search text — case-insensitive substring match across all fields"},"type":{"type":"string","description":"Filter by event type (meal, exercise, social, etc.)"},"tags":{"type":"string","description":"Filter by tags, comma-separated (event must have ALL listed tags)"},"limit":{"type":"integer","description":"Max events to return (default 50)"}}}]],
+    claims = {"log.query:events"}
 }
 
 function split(s, sep)
@@ -37,7 +37,7 @@ function has_all_tags(event_tags, want_tags)
 end
 
 function execute(args)
-    local raw = events.query(args.since or "24h")
+    local raw = events.query(args.since or "24h", args.text or "")
     local entries = json.decode(raw)
     if entries == nil then return "[]" end
 

@@ -2,7 +2,7 @@ tool = {
     name = "log_event",
     description = "Log a life event, activity, meal, or any notable occurrence. Use when the user mentions something they did, ate, felt, or experienced. Also use when the user says 'log: ...'",
     parameters = [[{"type":"object","properties":{"type":{"type":"string","description":"Category: meal, exercise, social, mood, health, work, sleep, hobby, errand, etc."},"content":{"type":"string","description":"What happened, in a concise sentence"},"tags":{"type":"string","description":"Comma-separated tags for flexible categorization (optional)"}},"required":["type","content"]}]],
-    claims = {"log:events"}
+    claims = {"log.append:events"}
 }
 
 function split(s, sep)

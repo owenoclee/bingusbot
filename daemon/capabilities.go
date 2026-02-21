@@ -33,14 +33,13 @@ var claims = map[string][]LuaFunc{
 
 // parameterizedClaims maps claim prefixes to factory functions that produce
 // namespace-scoped capabilities. Claim format: "prefix:param".
-// Example: "log:events" → events.append() and events.query() scoped to
-// ~/.bingus/logs/events/.
+// Example: "log.append:events" → events.append() scoped to ~/.bingus/logs/events/.
 var parameterizedClaims = map[string]func(param string) []LuaFunc{
-	"log": func(namespace string) []LuaFunc {
-		return []LuaFunc{
-			{namespace, "append", wrap(makeLogAppend(namespace))},
-			{namespace, "query", wrap(makeLogQuery(namespace))},
-		}
+	"log.append": func(namespace string) []LuaFunc {
+		return []LuaFunc{{namespace, "append", wrap(makeLogAppend(namespace))}}
+	},
+	"log.query": func(namespace string) []LuaFunc {
+		return []LuaFunc{{namespace, "query", wrap(makeLogQuery(namespace))}}
 	},
 }
 
