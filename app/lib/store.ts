@@ -3,7 +3,7 @@ import type { ServerFrame, StoredMessage } from "./types";
 
 export interface ChatMessage {
   id: string;
-  role: "user" | "agent";
+  role: "user" | "agent" | "system";
   content: string;
   createdAt: number;
   streaming?: boolean;

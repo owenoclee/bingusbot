@@ -107,12 +107,21 @@ func ExecuteLua(path string, toolClaims []string, argsJSON json.RawMessage) (str
 	// Push args table
 	pushValue(l, args)
 
-	// Call execute(args)
-	if err := l.ProtectedCall(1, 1, 0); err != nil {
+	// Call execute(args) — request up to 2 return values (result, err)
+	if err := l.ProtectedCall(1, 2, 0); err != nil {
 		return "", fmt.Errorf("execute() failed: %w", err)
 	}
 
-	// Get result
+	// Check for Lua-level error (second return value)
+	if errMsg, ok := l.ToString(-1); ok && errMsg != "" {
+		// If first return is nil, this is an error from a builtin
+		if l.IsNil(-2) {
+			return "", fmt.Errorf("%s", errMsg)
+		}
+	}
+	l.Pop(1) // pop the second return value
+
+	// Get result (first return value)
 	result, ok := l.ToString(-1)
 	if !ok {
 		return "", fmt.Errorf("execute() must return a string")

@@ -121,6 +121,19 @@ export async function createServer(opts: {
       pushIfDisconnected(text);
     },
 
+    async sendSystemMessage(conversationId: string, text: string) {
+      const id = crypto.randomUUID();
+      const msg: StoredMessage = {
+        id,
+        conversationId,
+        role: "system",
+        content: text,
+        createdAt: Date.now(),
+      };
+      store.insert(msg);
+      conn.send({ type: "message", id, role: "system", content: text, createdAt: msg.createdAt });
+    },
+
     async getHistory(conversationId: string, limit?: number): Promise<StoredMessage[]> {
       return store.getHistory(conversationId, limit);
     },

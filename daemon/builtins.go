@@ -264,6 +264,52 @@ func entryMatchesText(entry map[string]any, textLower string) bool {
 	return false
 }
 
+// --- wake functions ---
+
+// wakeSet validates and writes a wake schedule to ~/.bingus/wake.json.
+// Guard rails: minimum 5 minutes, maximum 7 days in the future.
+func wakeSet(isoTime string, reason string) (string, error) {
+	t, err := time.Parse(time.RFC3339, isoTime)
+	if err != nil {
+		return "", fmt.Errorf("invalid time %q: must be ISO 8601 (e.g. 2026-02-22T09:00:00Z)", isoTime)
+	}
+
+	now := time.Now().UTC()
+	diff := t.Sub(now)
+
+	if diff < 5*time.Minute {
+		return "", fmt.Errorf("wake time must be at least 5 minutes in the future (got %v)", diff.Round(time.Second))
+	}
+	if diff > 7*24*time.Hour {
+		return "", fmt.Errorf("wake time must be at most 7 days in the future (got %v)", diff.Round(time.Hour))
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("getting home dir: %w", err)
+	}
+
+	wake := map[string]string{
+		"wakeAt": t.UTC().Format(time.RFC3339),
+		"reason": reason,
+	}
+	data, err := json.MarshalIndent(wake, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("marshaling wake: %w", err)
+	}
+
+	dir := filepath.Join(home, ".bingus")
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return "", fmt.Errorf("creating dir: %w", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(dir, "wake.json"), data, 0644); err != nil {
+		return "", fmt.Errorf("writing wake file: %w", err)
+	}
+
+	return fmt.Sprintf("Wake scheduled for %s: %s", t.UTC().Format("2006-01-02 15:04 UTC"), reason), nil
+}
+
 // --- json functions ---
 
 func jsonEncode(value any) (string, error) {

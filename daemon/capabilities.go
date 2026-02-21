@@ -29,6 +29,7 @@ var claims = map[string][]LuaFunc{
 	"fs.read":   {{"fs", "read", wrap(fsRead)}},
 	"fs.write":  {{"fs", "write", wrap(fsWrite)}},
 	"fs.list":   {{"fs", "list", wrap(fsList)}},
+	"wake.set":  {{"wake", "set", wrap(wakeSet)}},
 }
 
 // parameterizedClaims maps claim prefixes to factory functions that produce

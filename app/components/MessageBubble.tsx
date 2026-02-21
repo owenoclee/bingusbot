@@ -55,6 +55,15 @@ const markdownBase = {
 
 export function MessageBubble({ message }: Props) {
   const isUser = message.role === "user";
+  const isSystem = message.role === "system";
+
+  if (isSystem) {
+    return (
+      <View style={styles.rowSystem}>
+        <Text style={styles.systemText}>{message.content}</Text>
+      </View>
+    );
+  }
 
   return (
     <View style={[styles.row, isUser && styles.rowUser]}>
@@ -73,6 +82,17 @@ const styles = StyleSheet.create({
   },
   rowUser: {
     backgroundColor: "rgba(0, 122, 255, 0.25)",
+  },
+  rowSystem: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    alignItems: "center",
+  },
+  systemText: {
+    color: "#8E8E93",
+    fontSize: 13,
+    fontStyle: "italic",
+    textAlign: "center",
   },
   cursor: {
     color: "#FFFFFF",

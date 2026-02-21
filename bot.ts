@@ -1,6 +1,7 @@
 import OpenAI from "https://deno.land/x/openai@v4.69.0/mod.ts";
 import {
   APNS_CONFIG,
+  BINGUS_DIR,
   DB_PATH,
   MAX_TOOL_ROUNDS,
   MODEL,
@@ -13,6 +14,8 @@ import { callTool, fetchTools } from "./tools.ts";
 import { createServer } from "./server/mod.ts";
 
 type Message = OpenAI.ChatCompletionMessageParam;
+
+const WAKE_FILE = `${BINGUS_DIR}/wake.json`;
 
 const openai = new OpenAI({
   baseURL: "https://openrouter.ai/api/v1",
@@ -37,6 +40,96 @@ if (tools.length > 0) {
 }
 
 const DEFAULT_CONVERSATION = "default";
+const WAKE_QUIET_PERIOD_MS = 2 * 60 * 1000; // 2 minutes
+
+// --- Wake scheduling ---
+
+interface WakeSchedule {
+  wakeAt: string; // ISO 8601
+  reason: string;
+}
+
+let wakeTimer: ReturnType<typeof setTimeout> | null = null;
+let lastActivityMs = 0; // timestamp of last user message or agent reply
+let replying = false;
+
+async function loadWakeSchedule(): Promise<WakeSchedule | null> {
+  try {
+    const text = await Deno.readTextFile(WAKE_FILE);
+    return JSON.parse(text) as WakeSchedule;
+  } catch {
+    return null;
+  }
+}
+
+async function clearWakeFile(): Promise<void> {
+  try {
+    await Deno.remove(WAKE_FILE);
+  } catch {
+    // Already gone — fine
+  }
+}
+
+function scheduleWake(): void {
+  if (wakeTimer) {
+    clearTimeout(wakeTimer);
+    wakeTimer = null;
+  }
+
+  loadWakeSchedule().then((schedule) => {
+    if (!schedule) return;
+
+    const wakeAt = new Date(schedule.wakeAt).getTime();
+    const delay = Math.max(0, wakeAt - Date.now());
+
+    // Ensure we don't fire during or immediately after a conversation.
+    // If the wake time has passed but conversation is recent, defer until
+    // the quiet period elapses.
+    const quietUntil = lastActivityMs + WAKE_QUIET_PERIOD_MS;
+    const effectiveDelay = Math.max(delay, quietUntil - Date.now());
+
+    if (effectiveDelay <= 0) {
+      console.log(`[wake] firing now: ${schedule.reason}`);
+      wake(schedule.reason);
+      return;
+    }
+
+    console.log(`[wake] scheduled in ${Math.round(effectiveDelay / 60000)}m: ${schedule.reason}`);
+    wakeTimer = setTimeout(() => {
+      wakeTimer = null;
+      // Re-check quiet period — new activity may have happened while we waited
+      const sinceLastActivity = Date.now() - lastActivityMs;
+      if (replying || sinceLastActivity < WAKE_QUIET_PERIOD_MS) {
+        console.log(`[wake] conversation active, deferring`);
+        scheduleWake(); // re-schedule, will defer again
+        return;
+      }
+      wake(schedule.reason);
+    }, effectiveDelay);
+  });
+}
+
+async function wake(reason: string): Promise<void> {
+  console.log(`[wake] waking: ${reason}`);
+  await clearWakeFile();
+
+  const systemText = `⏰ Wake: ${reason}`;
+  await server.sendSystemMessage(DEFAULT_CONVERSATION, systemText);
+
+  try {
+    replying = true;
+    await reply(DEFAULT_CONVERSATION, systemText);
+  } catch (err) {
+    console.error("wake reply error:", err);
+    await server.sendMessage(DEFAULT_CONVERSATION, "(error during wake)");
+  } finally {
+    replying = false;
+    lastActivityMs = Date.now();
+  }
+
+  // Agent may have scheduled a new wake during its response
+  scheduleWake();
+}
 
 // Streaming reply loop
 async function reply(conversationId: string, userText: string) {
@@ -46,7 +139,7 @@ async function reply(conversationId: string, userText: string) {
     { role: "system", content: SYSTEM_PROMPT },
     ...history.map((m) => ({
       role: (m.role === "agent" ? "assistant" : "user") as "assistant" | "user",
-      content: m.content,
+      content: m.role === "system" ? `[system] ${m.content}` : m.content,
     })),
   ];
 
@@ -175,12 +268,22 @@ async function reply(conversationId: string, userText: string) {
 // Wire up the message handler
 server.onUserMessage(async (msg) => {
   console.log(`[user] ${msg.text}`);
+  lastActivityMs = Date.now();
+  replying = true;
   try {
     await reply(msg.conversationId, msg.text);
   } catch (err) {
     console.error("reply error:", err);
     await server.sendMessage(msg.conversationId, "(error processing message)");
+  } finally {
+    replying = false;
+    lastActivityMs = Date.now();
   }
+  // Agent may have scheduled a wake during its response
+  scheduleWake();
 });
+
+// Check for pending wake on startup
+scheduleWake();
 
 console.log("bot is online! waiting for messages...");

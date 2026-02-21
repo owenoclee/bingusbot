@@ -2,7 +2,7 @@
 
 export interface StoredMessage {
   id: string;
-  role: "user" | "agent";
+  role: "user" | "agent" | "system";
   content: string;
   createdAt: number;
 }
@@ -21,5 +21,5 @@ export type ServerFrame =
   | { type: "message_start"; messageId: string }
   | { type: "token"; messageId: string; token: string }
   | { type: "message_end"; messageId: string; content: string }
-  | { type: "message"; id: string; role: "user" | "agent"; content: string; createdAt: number }
+  | { type: "message"; id: string; role: "user" | "agent" | "system"; content: string; createdAt: number }
   | { type: "sync_response"; messages: StoredMessage[] };
