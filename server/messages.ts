@@ -45,7 +45,7 @@ export class MessageStore {
     return rows.reverse().map((r) => ({
       id: r.id,
       conversationId: r.conversation_id,
-      role: r.role as "user" | "agent",
+      role: r.role as "user" | "agent" | "system",
       content: r.content,
       createdAt: r.created_at,
     }));
@@ -68,7 +68,7 @@ export class MessageStore {
     return rows.map((r) => ({
       id: r.id,
       conversationId: r.conversation_id,
-      role: r.role as "user" | "agent",
+      role: r.role as "user" | "agent" | "system",
       content: r.content,
       createdAt: r.created_at,
     }));

@@ -1,6 +1,7 @@
 import OpenAI from "https://deno.land/x/openai@v4.69.0/mod.ts";
 import {
   APNS_CONFIG,
+  BINGUS_DIR,
   DB_PATH,
   MAX_TOOL_ROUNDS,
   MODEL,
@@ -13,6 +14,8 @@ import { callTool, fetchTools } from "./tools.ts";
 import { createServer } from "./server/mod.ts";
 
 type Message = OpenAI.ChatCompletionMessageParam;
+
+const WAKE_FILE = `${BINGUS_DIR}/wake.json`;
 
 const openai = new OpenAI({
   baseURL: "https://openrouter.ai/api/v1",
@@ -38,6 +41,77 @@ if (tools.length > 0) {
 
 const DEFAULT_CONVERSATION = "default";
 
+// --- Wake scheduling ---
+
+interface WakeSchedule {
+  wakeAt: string; // ISO 8601
+  reason: string;
+}
+
+let wakeTimer: ReturnType<typeof setTimeout> | null = null;
+
+async function loadWakeSchedule(): Promise<WakeSchedule | null> {
+  try {
+    const text = await Deno.readTextFile(WAKE_FILE);
+    return JSON.parse(text) as WakeSchedule;
+  } catch {
+    return null;
+  }
+}
+
+async function clearWakeFile(): Promise<void> {
+  try {
+    await Deno.remove(WAKE_FILE);
+  } catch {
+    // Already gone — fine
+  }
+}
+
+function scheduleWake(): void {
+  if (wakeTimer) {
+    clearTimeout(wakeTimer);
+    wakeTimer = null;
+  }
+
+  loadWakeSchedule().then((schedule) => {
+    if (!schedule) return;
+
+    const wakeAt = new Date(schedule.wakeAt).getTime();
+    const delay = wakeAt - Date.now();
+
+    if (delay <= 0) {
+      // Already past — wake immediately
+      console.log(`[wake] overdue, waking now: ${schedule.reason}`);
+      wake(schedule.reason);
+      return;
+    }
+
+    console.log(`[wake] scheduled in ${Math.round(delay / 60000)}m: ${schedule.reason}`);
+    wakeTimer = setTimeout(() => {
+      wakeTimer = null;
+      wake(schedule.reason);
+    }, delay);
+  });
+}
+
+async function wake(reason: string): Promise<void> {
+  console.log(`[wake] waking: ${reason}`);
+  await clearWakeFile();
+
+  const systemText = `⏰ Wake: ${reason}`;
+  await server.sendSystemMessage(DEFAULT_CONVERSATION, systemText);
+
+  try {
+    await reply(DEFAULT_CONVERSATION, systemText);
+  } catch (err) {
+    console.error("wake reply error:", err);
+    await server.sendMessage(DEFAULT_CONVERSATION, "(error during wake)");
+  }
+
+  // Agent may have scheduled a new wake during its response
+  scheduleWake();
+}
+
 // Streaming reply loop
 async function reply(conversationId: string, userText: string) {
   // Build LLM messages from stored history
@@ -46,7 +120,7 @@ async function reply(conversationId: string, userText: string) {
     { role: "system", content: SYSTEM_PROMPT },
     ...history.map((m) => ({
       role: (m.role === "agent" ? "assistant" : "user") as "assistant" | "user",
-      content: m.content,
+      content: m.role === "system" ? `[system] ${m.content}` : m.content,
     })),
   ];
 
@@ -181,6 +255,11 @@ server.onUserMessage(async (msg) => {
     console.error("reply error:", err);
     await server.sendMessage(msg.conversationId, "(error processing message)");
   }
+  // Agent may have scheduled a wake during its response
+  scheduleWake();
 });
+
+// Check for pending wake on startup
+scheduleWake();
 
 console.log("bot is online! waiting for messages...");

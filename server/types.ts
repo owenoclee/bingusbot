@@ -2,7 +2,7 @@
 export interface StoredMessage {
   id: string;
   conversationId: string;
-  role: "user" | "agent";
+  role: "user" | "agent" | "system";
   content: string;
   createdAt: number; // unix ms
 }
@@ -20,6 +20,7 @@ export interface ServerInterface {
   sendToken(messageId: string, token: string): void;
   finalizeMessage(messageId: string, content: string): Promise<void>;
   sendMessage(conversationId: string, text: string): Promise<void>; // non-streaming shorthand
+  sendSystemMessage(conversationId: string, text: string): Promise<void>; // system event (wake, etc.)
   getHistory(conversationId: string, limit?: number): Promise<StoredMessage[]>;
 }
 
@@ -39,7 +40,7 @@ export type ServerFrame =
   | { type: "message_start"; messageId: string }
   | { type: "token"; messageId: string; token: string }
   | { type: "message_end"; messageId: string; content: string }
-  | { type: "message"; id: string; role: "user" | "agent"; content: string; createdAt: number }
+  | { type: "message"; id: string; role: "user" | "agent" | "system"; content: string; createdAt: number }
   | { type: "sync_response"; messages: StoredMessage[] };
 
 // APNs configuration

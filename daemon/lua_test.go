@@ -141,6 +141,21 @@ func TestExecuteLuaInvalidArgsJSON(t *testing.T) {
 	}
 }
 
+func TestExecuteLuaBuiltinError(t *testing.T) {
+	// A builtin that returns (nil, error) should propagate the error through execute()
+	claims := []string{}
+	// Inject a test builtin that always errors
+	_, err := ExecuteLua("testdata/good_builtin_error.lua", claims, json.RawMessage(`{}`))
+	if err == nil {
+		// The failme() function doesn't exist, so Lua will error
+		t.Fatal("expected error, got nil")
+	}
+	// Should get an error about calling nil (failme doesn't exist)
+	if !strings.Contains(err.Error(), "execute() failed") {
+		t.Errorf("error = %q, want containing 'execute() failed'", err.Error())
+	}
+}
+
 func TestExecuteLuaRuntimeError(t *testing.T) {
 	// good_add.lua with missing args will cause a nil arithmetic error in Lua
 	_, err := ExecuteLua("testdata/good_add.lua", nil, json.RawMessage(`{}`))
