@@ -1,23 +1,21 @@
 # BingusBot
 
-Just experimenting. Nothing to see here yet.
+A personal AI agent with a self-hosted WebSocket server and iOS app, powered by OpenRouter LLMs.
 
-Yet another OpenClaw clone! Or something like that...
-
-OpenClaw is an awesome project, it looks like fun and I feel the FOMO. I'm just too cautious to let it loose on my machine, so I started building this.
+Built to minimise the number of providers that can read conversations — no Telegram, no third-party push servers. Just a Deno server on a Raspberry Pi (accessed over Tailscale) and a native iOS app via TestFlight.
 
 Implemented:
-- [x] Basic Telegram bot
 - [x] Core written in TS/Deno
-- [x] LLM responses via OpenRouter (Gemini 3 Flash)
-- [x] Streaming replies with draft messages
-- [x] Conversation history by thread + persistence (JSON on disk)
-- [x] User allowlist via Telegram user IDs
-- [x] Markdown formatting with plaintext fallback
+- [x] LLM responses via OpenRouter (Gemini 3 Flash) with streaming
+- [x] WebSocket server with SQLite message persistence
+- [x] iOS app (Expo/React Native) with real-time streaming, markdown rendering
+- [x] APNs push notifications (native, no Expo servers)
+- [x] Conversation history with sync on reconnect
+- [x] Tools written in Lua, no blanket shell access
+- [x] Tools have no host access by default, file system/HTTP access must be granted explicitly via claims
+- [x] Core runs inside Docker, tool use interacts with a Go daemon on the host machine
 
 Ideas:
-- [ ] Tools written in Lua, no blanket shell access (quite limiting obviously, but pretty much all security goes out the window here if allowed)
-- [ ] Tools have no host access by default, file system/HTTP access must be granted explicitly
-- [ ] Core runs inside Docker, tool use interacts with a daemon on the host machine when necessary
-- [ ] Move away from Telegram; E2E encryption doesn't apply to bots?
 - [ ] Move away from OpenRouter; it is an unnecessary provider in the chain that can theoretically capture the data?
+- [ ] TLS via Tailscale certs
+- [ ] Bot-initiated messages (cron, external triggers)

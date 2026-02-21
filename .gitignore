@@ -2,3 +2,20 @@
 .claude/
 
 test_*.ts
+
+# Go build artifacts
+daemon/bingus-daemon
+daemon/.tool-versions
+
+# Expo / React Native
+app/node_modules/
+app/.expo/
+app/dist/
+app/ios/
+app/android/
+
+# App config (contains auth token)
+app/constants/config.ts
+
+# APNs keys
+*.p8
