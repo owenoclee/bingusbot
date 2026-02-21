@@ -1,10 +1,15 @@
 package main
 
 import (
+	"bufio"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -82,6 +87,154 @@ func fsList(path string) ([]any, error) {
 		}
 	}
 	return result, nil
+}
+
+// --- log functions (generic namespaced JSONL log) ---
+
+// logDir returns the directory for a log namespace, creating it if needed.
+// Logs live at ~/.bingus/logs/<namespace>/.
+func logDir(namespace string) (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("getting home dir: %w", err)
+	}
+	dir := filepath.Join(home, ".bingus", "logs", namespace)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return "", fmt.Errorf("creating log dir: %w", err)
+	}
+	return dir, nil
+}
+
+// randomID generates a short random hex ID.
+func randomID() string {
+	b := make([]byte, 8)
+	rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
+// makeLogAppend returns a function that appends entries to a namespaced JSONL log.
+// The entry data comes as a Lua table (map[string]any). The system injects id and
+// createdAt automatically.
+func makeLogAppend(namespace string) func(data any) (string, error) {
+	return func(data any) (string, error) {
+		dir, err := logDir(namespace)
+		if err != nil {
+			return "", err
+		}
+
+		entry, ok := data.(map[string]any)
+		if !ok {
+			return "", fmt.Errorf("log.append expects a table")
+		}
+
+		now := time.Now().UTC()
+		entry["id"] = randomID()
+		entry["createdAt"] = float64(now.UnixMilli())
+
+		line, err := json.Marshal(entry)
+		if err != nil {
+			return "", fmt.Errorf("marshaling entry: %w", err)
+		}
+
+		filename := now.Format("2006-01-02") + ".jsonl"
+		f, err := os.OpenFile(filepath.Join(dir, filename), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if err != nil {
+			return "", fmt.Errorf("opening log file: %w", err)
+		}
+		defer f.Close()
+
+		if _, err := f.Write(append(line, '\n')); err != nil {
+			return "", fmt.Errorf("writing entry: %w", err)
+		}
+
+		return fmt.Sprintf("Logged to %s", namespace), nil
+	}
+}
+
+// makeLogQuery returns a function that reads entries from a namespaced JSONL log.
+// Returns all entries since the given time boundary as a JSON array.
+// Filtering by domain-specific fields is left to the Lua tool.
+func makeLogQuery(namespace string) func(since string) (string, error) {
+	return func(since string) (string, error) {
+		dir, err := logDir(namespace)
+		if err != nil {
+			return "", err
+		}
+
+		cutoff, err := parseSince(since)
+		if err != nil {
+			return "", err
+		}
+		cutoffMs := cutoff.UnixMilli()
+
+		var entries []map[string]any
+		for d := cutoff; !d.After(time.Now().UTC()); d = d.AddDate(0, 0, 1) {
+			filename := filepath.Join(dir, d.Format("2006-01-02")+".jsonl")
+			dayEntries, err := readJSONLFile(filename, cutoffMs)
+			if err != nil {
+				continue // file may not exist
+			}
+			entries = append(entries, dayEntries...)
+		}
+
+		result, err := json.Marshal(entries)
+		if err != nil {
+			return "", fmt.Errorf("marshaling results: %w", err)
+		}
+		return string(result), nil
+	}
+}
+
+// parseSince parses a relative duration ("24h", "7d", "30d") or ISO timestamp.
+func parseSince(since string) (time.Time, error) {
+	if since == "" {
+		since = "24h"
+	}
+	now := time.Now().UTC()
+
+	// Try relative durations: Nd or Nh
+	if strings.HasSuffix(since, "d") {
+		var days int
+		if _, err := fmt.Sscanf(since, "%dd", &days); err == nil {
+			return now.AddDate(0, 0, -days), nil
+		}
+	}
+	if strings.HasSuffix(since, "h") {
+		var hours int
+		if _, err := fmt.Sscanf(since, "%dh", &hours); err == nil {
+			return now.Add(-time.Duration(hours) * time.Hour), nil
+		}
+	}
+
+	// Try ISO 8601
+	t, err := time.Parse(time.RFC3339, since)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("invalid since value %q: use '24h', '7d', or ISO timestamp", since)
+	}
+	return t, nil
+}
+
+// readJSONLFile reads entries from a JSONL file, filtering by time cutoff.
+func readJSONLFile(path string, cutoffMs int64) ([]map[string]any, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	var entries []map[string]any
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		var entry map[string]any
+		if err := json.Unmarshal(scanner.Bytes(), &entry); err != nil {
+			continue
+		}
+		if ts, ok := entry["createdAt"].(float64); ok && int64(ts) < cutoffMs {
+			continue
+		}
+		entries = append(entries, entry)
+	}
+	return entries, nil
 }
 
 // --- json functions ---

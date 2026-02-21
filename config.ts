@@ -31,8 +31,9 @@ export const APNS_CONFIG = APNS_KEY_PATH && APNS_KEY_ID && APNS_TEAM_ID && APNS_
 
 // --- Shared ---
 export const MODEL = "google/gemini-3-flash-preview";
-export const SYSTEM_PROMPT =
-  "You are a helpful personal AI assistant. Keep responses concise.";
+export const SYSTEM_PROMPT = `You are a helpful personal AI assistant. Keep responses concise.
+
+When the user mentions activities, meals, exercise, social events, mood, health, sleep, or other life events, log them using the log_event tool. If the user says "log: ..." always log it. Be judicious — log meaningful events, not every trivial detail. When logging, pick a short descriptive type (meal, exercise, social, mood, health, work, sleep, hobby, errand) and write a concise content string.`;
 export const DAEMON_URL = Deno.env.get("DAEMON_URL") ?? "http://localhost:8420";
 export const MAX_TOOL_ROUNDS = 10;
 
