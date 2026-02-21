@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"net/http"
@@ -163,6 +164,193 @@ func TestFsListNotFound(t *testing.T) {
 	_, err := fsList("/nonexistent/path")
 	if err == nil {
 		t.Fatal("expected error for nonexistent directory")
+	}
+}
+
+// --- log ---
+
+func TestLogAppendAndQuery(t *testing.T) {
+	dir := t.TempDir()
+	// Override logDir by writing directly, then querying
+	namespace := "test-ns"
+	origHome := os.Getenv("HOME")
+	os.Setenv("HOME", dir)
+	defer os.Setenv("HOME", origHome)
+
+	append := makeLogAppend(namespace)
+	query := makeLogQuery(namespace)
+
+	// Append an entry
+	result, err := append(map[string]any{"type": "meal", "content": "pizza"})
+	if err != nil {
+		t.Fatalf("append error: %v", err)
+	}
+	if result != "Logged to test-ns" {
+		t.Errorf("result = %q, want %q", result, "Logged to test-ns")
+	}
+
+	// Append another
+	_, err = append(map[string]any{"type": "exercise", "content": "ran 5km", "tags": []any{"outdoor"}})
+	if err != nil {
+		t.Fatalf("append error: %v", err)
+	}
+
+	// Query all
+	raw, err := query("24h", "")
+	if err != nil {
+		t.Fatalf("query error: %v", err)
+	}
+	var entries []map[string]any
+	if err := json.Unmarshal([]byte(raw), &entries); err != nil {
+		t.Fatalf("unmarshal error: %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("got %d entries, want 2", len(entries))
+	}
+
+	// Check auto-injected fields
+	if _, ok := entries[0]["id"]; !ok {
+		t.Error("entry missing auto-injected 'id'")
+	}
+	if _, ok := entries[0]["createdAt"]; !ok {
+		t.Error("entry missing auto-injected 'createdAt'")
+	}
+}
+
+func TestLogQueryTextSearch(t *testing.T) {
+	dir := t.TempDir()
+	origHome := os.Getenv("HOME")
+	os.Setenv("HOME", dir)
+	defer os.Setenv("HOME", origHome)
+
+	append := makeLogAppend("search-test")
+	query := makeLogQuery("search-test")
+
+	append(map[string]any{"content": "Had sushi for lunch"})
+	append(map[string]any{"content": "Pizza for dinner"})
+	append(map[string]any{"content": "Went for a walk", "tags": []any{"outdoor"}})
+
+	tests := []struct {
+		text  string
+		count int
+	}{
+		{"sushi", 1},
+		{"PIZZA", 1},     // case-insensitive
+		{"outdoor", 1},   // matches tags
+		{"for", 3},       // matches all
+		{"nonexistent", 0},
+		{"", 3},          // no filter
+	}
+
+	for _, tt := range tests {
+		raw, err := query("24h", tt.text)
+		if err != nil {
+			t.Fatalf("query(%q) error: %v", tt.text, err)
+		}
+		var entries []map[string]any
+		json.Unmarshal([]byte(raw), &entries)
+		if len(entries) != tt.count {
+			t.Errorf("query(text=%q): got %d entries, want %d", tt.text, len(entries), tt.count)
+		}
+	}
+}
+
+func TestLogAppendBadInput(t *testing.T) {
+	dir := t.TempDir()
+	origHome := os.Getenv("HOME")
+	os.Setenv("HOME", dir)
+	defer os.Setenv("HOME", origHome)
+
+	append := makeLogAppend("bad-input")
+	_, err := append("not a table")
+	if err == nil {
+		t.Fatal("expected error for non-table input")
+	}
+}
+
+func TestLogQueryEmpty(t *testing.T) {
+	dir := t.TempDir()
+	origHome := os.Getenv("HOME")
+	os.Setenv("HOME", dir)
+	defer os.Setenv("HOME", origHome)
+
+	query := makeLogQuery("empty")
+	raw, err := query("24h", "")
+	if err != nil {
+		t.Fatalf("query error: %v", err)
+	}
+	if raw != "null" {
+		t.Errorf("result = %q, want %q", raw, "null")
+	}
+}
+
+func TestParseSince(t *testing.T) {
+	now := time.Now().UTC()
+
+	tests := []struct {
+		input    string
+		wantDiff time.Duration
+		wantErr  bool
+	}{
+		{"24h", 24 * time.Hour, false},
+		{"7d", 7 * 24 * time.Hour, false},
+		{"1h", 1 * time.Hour, false},
+		{"", 24 * time.Hour, false}, // default
+		{"bogus", 0, true},
+	}
+
+	for _, tt := range tests {
+		result, err := parseSince(tt.input)
+		if tt.wantErr {
+			if err == nil {
+				t.Errorf("parseSince(%q): expected error", tt.input)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("parseSince(%q): unexpected error: %v", tt.input, err)
+			continue
+		}
+		diff := now.Sub(result)
+		if diff < tt.wantDiff-2*time.Second || diff > tt.wantDiff+2*time.Second {
+			t.Errorf("parseSince(%q): diff=%v, want ~%v", tt.input, diff, tt.wantDiff)
+		}
+	}
+
+	// ISO timestamp
+	ts := "2026-01-15T10:00:00Z"
+	result, err := parseSince(ts)
+	if err != nil {
+		t.Fatalf("parseSince(%q): unexpected error: %v", ts, err)
+	}
+	expected, _ := time.Parse(time.RFC3339, ts)
+	if !result.Equal(expected) {
+		t.Errorf("parseSince(%q) = %v, want %v", ts, result, expected)
+	}
+}
+
+func TestEntryMatchesText(t *testing.T) {
+	entry := map[string]any{
+		"type":    "meal",
+		"content": "Had Sushi for lunch",
+		"tags":    []any{"Japanese", "restaurant"},
+	}
+
+	tests := []struct {
+		text string
+		want bool
+	}{
+		{"sushi", true},    // case-insensitive content
+		{"meal", true},     // matches type (caller lowercases)
+		{"japanese", true}, // matches tag
+		{"dinner", false},
+	}
+
+	for _, tt := range tests {
+		got := entryMatchesText(entry, tt.text)
+		if got != tt.want {
+			t.Errorf("entryMatchesText(text=%q) = %v, want %v", tt.text, got, tt.want)
+		}
 	}
 }
 

@@ -251,18 +251,134 @@ end
 }
 
 func TestIsValidClaim(t *testing.T) {
-	valid := []string{"http.get", "http.post", "fs.read", "fs.write", "fs.list"}
+	valid := []string{"http.get", "http.post", "fs.read", "fs.write", "fs.list",
+		"log.append:events", "log.query:events", "log.append:todos", "log.query:my-log"}
 	for _, c := range valid {
 		if !IsValidClaim(c) {
 			t.Errorf("IsValidClaim(%q) = false, want true", c)
 		}
 	}
 
-	invalid := []string{"", "bogus", "http.delete", "fs.execute", "os.time", "json"}
+	invalid := []string{"", "bogus", "http.delete", "fs.execute", "os.time", "json",
+		"log:events",            // old format, no longer valid
+		"log.append:",           // empty namespace
+		"log.append:UPPER",      // uppercase not allowed
+		"log.append:../escape",  // path traversal
+		"log.append:has space",  // spaces not allowed
+		"bogus:events",          // unknown prefix
+	}
 	for _, c := range invalid {
 		if IsValidClaim(c) {
 			t.Errorf("IsValidClaim(%q) = true, want false", c)
 		}
+	}
+}
+
+func TestLogAppendClaimInjected(t *testing.T) {
+	tmpDir := t.TempDir()
+	origHome := os.Getenv("HOME")
+	os.Setenv("HOME", tmpDir)
+	defer os.Setenv("HOME", origHome)
+
+	toolPath := tmpDir + "/log_tool.lua"
+	os.WriteFile(toolPath, []byte(`
+tool = {
+    name = "log_tool",
+    description = "Log test",
+    parameters = [[{"type":"object","properties":{}}]],
+    claims = {"log.append:test-ns"}
+}
+function execute(args)
+    local result = test_ns.append({msg = "hello"})
+    return result
+end
+`), 0644)
+
+	// Note: claim uses "test-ns" but Lua namespace becomes "test_ns"
+	// Actually no — the namespace IS "test-ns" and Lua uses test-ns which isn't
+	// a valid identifier. Let me use "testns" instead.
+
+	os.WriteFile(toolPath, []byte(`
+tool = {
+    name = "log_tool",
+    description = "Log test",
+    parameters = [[{"type":"object","properties":{}}]],
+    claims = {"log.append:testns"}
+}
+function execute(args)
+    local result = testns.append({msg = "hello"})
+    return result
+end
+`), 0644)
+
+	result, err := ExecuteLua(toolPath, []string{"log.append:testns"}, json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != "Logged to testns" {
+		t.Errorf("result = %q, want %q", result, "Logged to testns")
+	}
+}
+
+func TestLogQueryClaimInjected(t *testing.T) {
+	tmpDir := t.TempDir()
+	origHome := os.Getenv("HOME")
+	os.Setenv("HOME", tmpDir)
+	defer os.Setenv("HOME", origHome)
+
+	// First append via Go directly
+	appendFn := makeLogAppend("testns")
+	appendFn(map[string]any{"content": "test entry"})
+
+	toolPath := tmpDir + "/query_tool.lua"
+	os.WriteFile(toolPath, []byte(`
+tool = {
+    name = "query_tool",
+    description = "Query test",
+    parameters = [[{"type":"object","properties":{}}]],
+    claims = {"log.query:testns"}
+}
+function execute(args)
+    return testns.query("24h", "")
+end
+`), 0644)
+
+	result, err := ExecuteLua(toolPath, []string{"log.query:testns"}, json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(result, "test entry") {
+		t.Errorf("result should contain 'test entry', got %q", result)
+	}
+}
+
+func TestLogClaimIsolation(t *testing.T) {
+	// A tool with log.append:foo should NOT have access to foo.query
+	tmpDir := t.TempDir()
+	toolPath := tmpDir + "/isolated.lua"
+	os.WriteFile(toolPath, []byte(`
+tool = {
+    name = "isolated",
+    description = "Check isolation",
+    parameters = [[{"type":"object","properties":{}}]],
+    claims = {"log.append:myns"}
+}
+function execute(args)
+    local append_type = type(myns.append)
+    local query_type = type(myns.query)
+    return "append=" .. append_type .. ",query=" .. query_type
+end
+`), 0644)
+
+	result, err := ExecuteLua(toolPath, []string{"log.append:myns"}, json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(result, "append=function") {
+		t.Errorf("myns.append should be function, got %q", result)
+	}
+	if !strings.Contains(result, "query=nil") {
+		t.Errorf("myns.query should be nil without log.query claim, got %q", result)
 	}
 }
 

@@ -2,6 +2,7 @@ package main
 
 import (
 	"reflect"
+	"strings"
 
 	lua "github.com/Shopify/go-lua"
 )
@@ -30,10 +31,45 @@ var claims = map[string][]LuaFunc{
 	"fs.list":   {{"fs", "list", wrap(fsList)}},
 }
 
+// parameterizedClaims maps claim prefixes to factory functions that produce
+// namespace-scoped capabilities. Claim format: "prefix:param".
+// Example: "log.append:events" → events.append() scoped to ~/.bingus/logs/events/.
+var parameterizedClaims = map[string]func(param string) []LuaFunc{
+	"log.append": func(namespace string) []LuaFunc {
+		return []LuaFunc{{namespace, "append", wrap(makeLogAppend(namespace))}}
+	},
+	"log.query": func(namespace string) []LuaFunc {
+		return []LuaFunc{{namespace, "query", wrap(makeLogQuery(namespace))}}
+	},
+}
+
 // IsValidClaim reports whether a claim name is recognized.
 func IsValidClaim(claim string) bool {
-	_, ok := claims[claim]
-	return ok
+	if _, ok := claims[claim]; ok {
+		return true
+	}
+	prefix, param, found := strings.Cut(claim, ":")
+	if !found {
+		return false
+	}
+	if _, ok := parameterizedClaims[prefix]; !ok {
+		return false
+	}
+	return isValidNamespace(param)
+}
+
+// isValidNamespace checks that a namespace is safe for use as a directory name.
+// Only lowercase alphanumeric and hyphens allowed.
+func isValidNamespace(ns string) bool {
+	if ns == "" {
+		return false
+	}
+	for _, c := range ns {
+		if !((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-') {
+			return false
+		}
+	}
+	return true
 }
 
 // InjectAlwaysOn injects all always-on capabilities into the Lua state.
@@ -45,8 +81,20 @@ func InjectAlwaysOn(l *lua.State) {
 
 // InjectClaim injects all functions granted by a claim into the Lua state.
 func InjectClaim(l *lua.State, claim string) {
-	for _, f := range claims[claim] {
-		injectFunc(l, f)
+	if funcs, ok := claims[claim]; ok {
+		for _, f := range funcs {
+			injectFunc(l, f)
+		}
+		return
+	}
+	prefix, param, found := strings.Cut(claim, ":")
+	if !found {
+		return
+	}
+	if factory, ok := parameterizedClaims[prefix]; ok {
+		for _, f := range factory(param) {
+			injectFunc(l, f)
+		}
 	}
 }
 
