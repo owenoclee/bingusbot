@@ -54,7 +54,6 @@ export const SYSTEM_PROMPT = `You are a helpful personal AI assistant. Keep resp
 When the user mentions activities, meals, exercise, social events, mood, health, sleep, or other life events, log them using the log_event tool. If the user says "log: ..." always log it. Be judicious — log meaningful events, not every trivial detail. When logging, pick a short descriptive type (meal, exercise, social, mood, health, work, sleep, hobby, errand) and write a concise content string.
 
 You can schedule yourself to wake up later using schedule_wake. Use this when you want to check in, follow up on something, or act on a time-sensitive event. When you wake, you'll receive a system message with the reason you set — use it to decide what to do.`;
-export const DAEMON_URL = Deno.env.get("DAEMON_URL") ?? "http://localhost:8420";
 export const MAX_TOOL_ROUNDS = 10;
 
 export { OPENROUTER_KEY };

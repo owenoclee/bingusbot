@@ -1,7 +1,7 @@
 # Personal AI Agent
 
 ## Overview
-BingusBot: a personal AI agent with a self-hosted WebSocket server and iOS app, powered by OpenRouter LLMs. Supports tool-calling via a Go daemon that executes Lua-based tools.
+BingusBot: a personal AI agent with a self-hosted WebSocket server and iOS app, powered by OpenRouter LLMs. Tools are plain TypeScript functions running in-process.
 
 ## Architecture
 ```
@@ -9,7 +9,7 @@ iOS App ──WS/Tailscale──▶ Messaging Server (Deno, Pi)
                                 │
                                 ├── Bot logic (same process, clean module boundary)
                                 │     ├── OpenRouter LLM (streaming)
-                                │     └── Tool Daemon (Go, HTTP :8420)
+                                │     └── Tools (in-process TS functions)
                                 │
                                 └── APNs (push when app not connected)
 ```
@@ -21,14 +21,18 @@ Two participants: user + agent. Single conversation. The messaging server provid
 - **LLM**: OpenRouter API (OpenAI-compatible) - currently using `google/gemini-3-flash-preview`
 - **Server**: Deno WebSocket server with SQLite persistence
 - **iOS App**: Expo (React Native) with Zustand state management
-- **Tool Daemon**: Go + Shopify/go-lua
 - **Push Notifications**: APNs (native, no Expo push servers)
-- **Containerization**: Docker + Docker Compose
 
 ## File Structure
 - **`config.ts`** - All env var reads + constants (model, system prompt, server config, etc.). Fails fast if required vars are missing.
 - **`bot.ts`** - Main entry point. Creates server, streaming LLM replies, tool-calling loop.
-- **`tools.ts`** - Daemon HTTP client: `fetchTools()`, `callTool()`.
+- **`tools/`** - In-process tool system.
+  - `registry.ts` - `RUN_TOOL` definition, `TOOLS_PROMPT`, `TOOL_NAMES`, `callTool()`.
+  - `_util.ts` - Shared helpers: `randomId`, `parseSince`, `appendEntry`, `readEntries` (JSONL log).
+  - `current_time.ts` - Returns current UTC time.
+  - `log_event.ts` - Appends life events to `~/.bingus/logs/events/YYYY-MM-DD.jsonl`.
+  - `query_events.ts` - Queries logged events by time, type, tags, text.
+  - `schedule_wake.ts` - Writes `~/.bingus/wake.json` for self-wake scheduling.
 - **`server/`** - WebSocket messaging server module.
   - `types.ts` - Message types, ServerInterface, WS protocol frame types, APNs config.
   - `mod.ts` - `createServer()` — HTTP server, WS upgrade, implements ServerInterface.
@@ -44,21 +48,12 @@ Two participants: user + agent. Single conversation. The messaging server provid
   - `lib/types.ts` - Shared types (mirrors server/types.ts).
   - `lib/notifications.ts` - Native APNs token registration.
   - `constants/config.ts` - WS URL, auth token.
-- **`daemon/`** - Go daemon that serves tools over HTTP.
-  - `main.go` - HTTP server (health, tools, call endpoints).
-  - `registry.go` - Tool discovery from Lua files + OpenAI schema generation.
-  - `lua.go` - Lua VM sandbox setup, execution, and Go↔Lua marshaling.
-  - `capabilities.go` - Claims-based capability injection framework.
-  - `builtins.go` - Pure Go implementations of tool capabilities.
-- **`tools/`** - Lua tool definitions (add.lua, time.lua, etc.).
-- **`Dockerfile`** / **`docker-compose.yml`** - Container setup for the bot + server.
 
 ## Environment Variables
 - `OPENROUTER_KEY` - OpenRouter API key
 - `WS_PORT` - WebSocket server port (default: 8421)
 - `WS_AUTH_TOKEN` - Shared secret for WS authentication
 - `DB_PATH` - SQLite database path (default: ~/.bingus/messages.db)
-- `DAEMON_URL` - Tool daemon URL (optional, defaults to `http://localhost:8420`)
 - `APNS_KEY_PATH` - Path to .p8 APNs key file (optional)
 - `APNS_KEY_ID` - APNs key ID (optional)
 - `APNS_TEAM_ID` - Apple team ID (optional)
@@ -81,27 +76,16 @@ Two participants: user + agent. Single conversation. The messaging server provid
 - `{ type: "sync_response", messages: [...] }` — history catch-up
 
 ## Tool System
-- Tools are Lua files in `tools/` defining a `tool` table and `execute(args)` function
-- Lua VMs are **bare by default** — only core language features (math, string, table)
-- Always-on capabilities (no claim needed): `time.now`, `time.unix`, `json.encode`, `json.decode`
-- Tools declare `claims` for additional capabilities (e.g., `http.get`, `fs.read`)
-- Available claims: `http.get`, `http.post`, `fs.read`, `fs.write`, `fs.list`
+- Tools are plain async functions in `tools/` (no schema boilerplate)
+- A single `run(name, args)` OpenAI tool definition is sent to the LLM; tool descriptions live in `TOOLS_PROMPT` (plain text appended to the system prompt)
+- `tools/registry.ts` exports `RUN_TOOL`, `TOOLS_PROMPT`, `TOOL_NAMES`, and `callTool()`
+- To add a tool: create `tools/my_tool.ts` with an exported async function, add it to the `toolMap` in `registry.ts`, and add a line to `TOOLS_PROMPT`
 
 ## Running
 
-### Daemon (on host)
+### Bot
 ```bash
-cd daemon && go build -o bingus-daemon . && ./bingus-daemon --tools ../tools
-```
-
-### Bot (local, without Docker)
-```bash
-WS_AUTH_TOKEN=secret DAEMON_URL=http://localhost:8420 deno run --allow-net --allow-env --allow-read --allow-write --allow-run --allow-ffi --unstable-ffi bot.ts
-```
-
-### Bot (Docker)
-```bash
-docker compose up --build
+WS_AUTH_TOKEN=secret deno run --allow-net --allow-env --allow-read --allow-write --allow-run --allow-ffi --unstable-ffi bot.ts
 ```
 
 ### iOS App
