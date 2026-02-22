@@ -10,7 +10,7 @@ import {
   WS_AUTH_TOKEN,
   WS_PORT,
 } from "./config.ts";
-import { callTool, fetchTools } from "./tools.ts";
+import { callTool, RUN_TOOL, TOOL_NAMES, TOOLS_PROMPT } from "./tools/registry.ts";
 import { createServer } from "./server/mod.ts";
 
 type Message = OpenAI.ChatCompletionMessageParam;
@@ -30,14 +30,7 @@ const server = await createServer({
   apns: APNS_CONFIG,
 });
 
-// Fetch tools from daemon at startup
-const tools = await fetchTools();
-if (tools.length > 0) {
-  console.log(`loaded ${tools.length} tool(s) from daemon:`);
-  for (const t of tools) console.log(`  → ${t.function.name}`);
-} else {
-  console.log("no tools available (daemon unreachable or no tools loaded)");
-}
+console.log(`tools: ${TOOL_NAMES.join(", ")}`);
 
 const DEFAULT_CONVERSATION = "default";
 const WAKE_QUIET_PERIOD_MS = 30 * 1000; // 30 seconds
@@ -136,7 +129,7 @@ async function reply(conversationId: string, userText: string) {
   // Build LLM messages from stored history
   const history = await server.getHistory(conversationId, 100);
   const llmMessages: Message[] = [
-    { role: "system", content: SYSTEM_PROMPT },
+    { role: "system", content: SYSTEM_PROMPT + "\n\n" + TOOLS_PROMPT },
     ...history.map((m) => {
       const role = (m.role === "agent" ? "assistant" : "user") as "assistant" | "user";
       if (m.role === "agent") {
@@ -170,7 +163,7 @@ async function reply(conversationId: string, userText: string) {
     const stream = await openai.chat.completions.create({
       model: MODEL,
       messages: llmMessages,
-      ...(tools.length > 0 ? { tools } : {}),
+      tools: [RUN_TOOL],
       stream: true,
     });
 
@@ -233,17 +226,19 @@ async function reply(conversationId: string, userText: string) {
 
       // Execute each tool call
       for (const tc of toolCalls) {
-        let args: Record<string, unknown>;
+        let parsed: Record<string, unknown>;
         try {
-          args = JSON.parse(tc.function.arguments);
+          parsed = JSON.parse(tc.function.arguments);
         } catch {
-          args = {};
+          parsed = {};
         }
-        console.log(`  [tool] ${tc.function.name}(${JSON.stringify(args)})`);
+        const toolName = parsed.name as string ?? tc.function.name;
+        const toolArgs = (parsed.args as Record<string, unknown>) ?? {};
+        console.log(`  [tool] ${toolName}(${JSON.stringify(toolArgs)})`);
 
         let result: string;
         try {
-          result = await callTool(tc.function.name, args);
+          result = await callTool(toolName, toolArgs);
         } catch (err) {
           result = `error: ${err instanceof Error ? err.message : String(err)}`;
         }
