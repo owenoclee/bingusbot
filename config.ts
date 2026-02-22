@@ -22,14 +22,29 @@ export const WS_PORT = Number(Deno.env.get("WS_PORT") ?? "8421");
 export const WS_AUTH_TOKEN = requireEnv("WS_AUTH_TOKEN");
 export const DB_PATH = Deno.env.get("DB_PATH") ?? `${BINGUS_DIR}/messages.db`;
 
-// --- APNs (optional) ---
-export const APNS_KEY_PATH = optionalEnv("APNS_KEY_PATH");
-export const APNS_KEY_ID = optionalEnv("APNS_KEY_ID");
-export const APNS_TEAM_ID = optionalEnv("APNS_TEAM_ID");
-export const APNS_BUNDLE_ID = optionalEnv("APNS_BUNDLE_ID");
+// --- APNs (optional, but warn if partially configured) ---
+const APNS_VARS = {
+  APNS_KEY_PATH: optionalEnv("APNS_KEY_PATH"),
+  APNS_KEY_ID: optionalEnv("APNS_KEY_ID"),
+  APNS_TEAM_ID: optionalEnv("APNS_TEAM_ID"),
+  APNS_BUNDLE_ID: optionalEnv("APNS_BUNDLE_ID"),
+} as const;
 
-export const APNS_CONFIG = APNS_KEY_PATH && APNS_KEY_ID && APNS_TEAM_ID && APNS_BUNDLE_ID
-  ? { keyPath: APNS_KEY_PATH, keyId: APNS_KEY_ID, teamId: APNS_TEAM_ID, bundleId: APNS_BUNDLE_ID }
+const apnsSet = Object.entries(APNS_VARS).filter(([_, v]) => v);
+const apnsMissing = Object.entries(APNS_VARS).filter(([_, v]) => !v);
+
+if (apnsSet.length > 0 && apnsMissing.length > 0) {
+  console.warn(
+    `⚠ APNs partially configured — missing: ${apnsMissing.map(([k]) => k).join(", ")}. Push notifications disabled.`
+  );
+} else if (apnsSet.length === 0) {
+  console.warn("⚠ No APNs env vars set — push notifications disabled.");
+}
+
+const APNS_SANDBOX = Deno.env.get("APNS_SANDBOX") !== "false"; // default: true (sandbox)
+
+export const APNS_CONFIG = apnsMissing.length === 0
+  ? { keyPath: APNS_VARS.APNS_KEY_PATH!, keyId: APNS_VARS.APNS_KEY_ID!, teamId: APNS_VARS.APNS_TEAM_ID!, bundleId: APNS_VARS.APNS_BUNDLE_ID!, sandbox: APNS_SANDBOX }
   : undefined;
 
 // --- Shared ---

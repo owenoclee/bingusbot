@@ -49,4 +49,5 @@ export interface APNsConfig {
   keyId: string;
   teamId: string;
   bundleId: string;
+  sandbox: boolean;
 }
