@@ -1,10 +1,12 @@
 import type { APNsConfig } from "./types.ts";
 
-const APNS_HOST = "https://api.push.apple.com";
+const APNS_PROD = "https://api.push.apple.com";
+const APNS_SANDBOX = "https://api.sandbox.push.apple.com";
 const TOKEN_TTL_MS = 50 * 60 * 1000; // refresh JWT every 50 min (max is 60)
 
 export class APNsClient {
   private config: APNsConfig;
+  private host: string;
   private jwt: string | null = null;
   private jwtIssuedAt = 0;
   private deviceToken: string | null = null;
@@ -12,8 +14,10 @@ export class APNsClient {
 
   constructor(config: APNsConfig, dataDir: string) {
     this.config = config;
+    this.host = config.sandbox ? APNS_SANDBOX : APNS_PROD;
     this.tokenPath = `${dataDir}/device_token.txt`;
     this.loadDeviceToken();
+    console.log(`APNs using ${config.sandbox ? "sandbox" : "production"} environment`);
   }
 
   private loadDeviceToken() {
@@ -109,7 +113,7 @@ export class APNsClient {
           "-s",
           "-w", "%{http_code}",
           "-X", "POST",
-          `${APNS_HOST}/3/device/${this.deviceToken}`,
+          `${this.host}/3/device/${this.deviceToken}`,
           "-H", `authorization: bearer ${jwt}`,
           "-H", `apns-topic: ${this.config.bundleId}`,
           "-H", "apns-push-type: alert",

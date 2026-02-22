@@ -137,18 +137,31 @@ async function reply(conversationId: string, userText: string) {
   const history = await server.getHistory(conversationId, 100);
   const llmMessages: Message[] = [
     { role: "system", content: SYSTEM_PROMPT },
-    ...history.map((m) => ({
-      role: (m.role === "agent" ? "assistant" : "user") as "assistant" | "user",
-      content: m.role === "system" ? `[system] ${m.content}` : m.content,
-    })),
+    ...history.map((m) => {
+      const role = (m.role === "agent" ? "assistant" : "user") as "assistant" | "user";
+      if (m.role === "agent") {
+        return { role, content: m.content };
+      }
+      const time = new Date(m.createdAt).toLocaleString("en-GB", {
+        weekday: "short", day: "numeric", month: "short",
+        hour: "2-digit", minute: "2-digit", timeZone: "Europe/London",
+      });
+      const prefix = m.role === "system" ? `[system @ ${time}]` : `[${time}]`;
+      return { role, content: `${prefix} ${m.content}` };
+    }),
   ];
 
   // The latest user message is already in history (stored by ConnectionManager),
   // but we need to make sure it's included in the LLM context.
   // If the last message in history isn't the user's latest, append it.
-  const lastHistoryMsg = llmMessages[llmMessages.length - 1];
-  if (!lastHistoryMsg || lastHistoryMsg.role !== "user" || lastHistoryMsg.content !== userText) {
-    llmMessages.push({ role: "user", content: userText });
+  // Compare against the raw history (before timestamp prefixes) to avoid false mismatches.
+  const lastRaw = history[history.length - 1];
+  if (!lastRaw || lastRaw.role !== "user" || lastRaw.content !== userText) {
+    const time = new Date().toLocaleString("en-GB", {
+      weekday: "short", day: "numeric", month: "short",
+      hour: "2-digit", minute: "2-digit", timeZone: "Europe/London",
+    });
+    llmMessages.push({ role: "user", content: `[${time}] ${userText}` });
   }
 
   let finalText = "";

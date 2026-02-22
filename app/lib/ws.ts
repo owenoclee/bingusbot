@@ -6,6 +6,7 @@ let socket: WebSocket | null = null;
 let reconnectDelay = 1000;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+let pendingPushToken: string | null = null;
 
 function send(frame: ClientFrame) {
   if (socket && socket.readyState === WebSocket.OPEN) {
@@ -18,6 +19,7 @@ export function sendMessage(text: string) {
 }
 
 export function registerPushToken(deviceToken: string) {
+  pendingPushToken = deviceToken;
   send({ type: "register_push", deviceToken });
 }
 
@@ -62,6 +64,10 @@ export function connect() {
         reconnectDelay = 1000;
         useChatStore.getState().setConnected(true);
         startHeartbeat();
+        // Re-register push token if we have one
+        if (pendingPushToken) {
+          send({ type: "register_push", deviceToken: pendingPushToken });
+        }
         // Sync missed messages
         const lastSeen = useChatStore.getState().getLastSeenTimestamp();
         send({ type: "sync", after: lastSeen });

@@ -17,6 +17,6 @@
       "supportsTablet": false,
       "bundleIdentifier": "com.example.bingus"
     },
-    "plugins": []
+    "plugins": ["expo-notifications"]
   }
 }
