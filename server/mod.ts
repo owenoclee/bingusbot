@@ -79,34 +79,6 @@ export async function createServer(opts: {
       userMessageCallback = cb;
     },
 
-    async allocateAgentMessage(conversationId: string): Promise<string> {
-      const id = crypto.randomUUID();
-      conn.trackMessage(id, conversationId);
-      conn.send({ type: "message_start", messageId: id });
-      return id;
-    },
-
-    sendToken(messageId: string, token: string) {
-      conn.send({ type: "token", messageId, token });
-    },
-
-    async finalizeMessage(messageId: string, content: string) {
-      conn.untrackMessage(messageId);
-      // Persist
-      const msg: StoredMessage = {
-        id: messageId,
-        conversationId: DEFAULT_CONVERSATION,
-        role: "agent",
-        content,
-        createdAt: Date.now(),
-      };
-      store.insert(msg);
-      // Send to client
-      conn.send({ type: "message_end", messageId, content });
-      // Push if disconnected
-      pushIfDisconnected(content);
-    },
-
     async sendMessage(conversationId: string, text: string) {
       const id = crypto.randomUUID();
       const msg: StoredMessage = {

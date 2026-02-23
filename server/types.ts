@@ -16,11 +16,8 @@ export interface IncomingMessage {
 // Server interface — the clean boundary the bot consumes
 export interface ServerInterface {
   onUserMessage(cb: (msg: IncomingMessage) => void): void;
-  allocateAgentMessage(conversationId: string): Promise<string>; // returns message ID
-  sendToken(messageId: string, token: string): void;
-  finalizeMessage(messageId: string, content: string): Promise<void>;
-  sendMessage(conversationId: string, text: string): Promise<void>; // non-streaming shorthand
-  sendSystemMessage(conversationId: string, text: string): Promise<void>; // system event (wake, etc.)
+  sendMessage(conversationId: string, text: string): Promise<void>;
+  sendSystemMessage(conversationId: string, text: string): Promise<void>;
   getHistory(conversationId: string, limit?: number): Promise<StoredMessage[]>;
 }
 
@@ -37,9 +34,6 @@ export type ClientFrame =
 export type ServerFrame =
   | { type: "auth_ok" }
   | { type: "auth_fail" }
-  | { type: "message_start"; messageId: string }
-  | { type: "token"; messageId: string; token: string }
-  | { type: "message_end"; messageId: string; content: string }
   | { type: "message"; id: string; role: "user" | "agent" | "system"; content: string; createdAt: number }
   | { type: "sync_response"; messages: StoredMessage[] };
 
