@@ -1,3 +1,9 @@
+// Package config reads all environment variables and exports validated
+// constants. It fails fast on missing required values so the rest of the
+// application can assume configuration is present and well-formed.
+
+// requireEnv reads an environment variable or exits the process
+// immediately if it is not set.
 function requireEnv(name: string): string {
   const value = Deno.env.get(name);
   if (!value) {
@@ -7,6 +13,8 @@ function requireEnv(name: string): string {
   return value;
 }
 
+// optionalEnv reads an environment variable, returning undefined if
+// it is empty or not set.
 function optionalEnv(name: string): string | undefined {
   return Deno.env.get(name) || undefined;
 }

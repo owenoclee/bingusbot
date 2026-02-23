@@ -1,4 +1,7 @@
-import OpenAI from "https://deno.land/x/openai@v4.69.0/mod.ts";
+// Package bot is the application entry point. It wires together the server,
+// agent, tools, and wake scheduler, and routes incoming user messages through
+// the agent reply loop.
+
 import {
   APNS_CONFIG,
   BINGUS_DIR,
@@ -12,17 +15,15 @@ import {
 } from "./config.ts";
 import { callTool, RUN_TOOL, TOOL_NAMES, TOOLS_PROMPT } from "./tools/registry.ts";
 import { createServer } from "./server/mod.ts";
-
-type Message = OpenAI.ChatCompletionMessageParam;
+import { createOpenRouterLLM } from "./llm.ts";
+import { agentReply } from "./agent.ts";
+import type { AgentDeps } from "./agent.ts";
+import { buildLLMMessages } from "./history.ts";
+import { createWakeScheduler } from "./wake.ts";
 
 const WAKE_FILE = `${BINGUS_DIR}/wake.json`;
+const DEFAULT_CONVERSATION = "default";
 
-const openai = new OpenAI({
-  baseURL: "https://openrouter.ai/api/v1",
-  apiKey: OPENROUTER_KEY,
-});
-
-// Start the server
 const server = await createServer({
   port: WS_PORT,
   authToken: WS_AUTH_TOKEN,
@@ -30,268 +31,68 @@ const server = await createServer({
   apns: APNS_CONFIG,
 });
 
+const agent: AgentDeps = {
+  llm: createOpenRouterLLM(OPENROUTER_KEY, MODEL),
+  tools: { call: callTool },
+  toolDefs: [RUN_TOOL],
+  systemPrompt: SYSTEM_PROMPT + "\n\n" + TOOLS_PROMPT,
+  maxToolRounds: MAX_TOOL_ROUNDS,
+};
+
 console.log(`tools: ${TOOL_NAMES.join(", ")}`);
 
-const DEFAULT_CONVERSATION = "default";
-const WAKE_QUIET_PERIOD_MS = 30 * 1000; // 30 seconds
-
-// --- Wake scheduling ---
-
-interface WakeSchedule {
-  wakeAt: string; // ISO 8601
-  reason: string;
-}
-
-let wakeTimer: ReturnType<typeof setTimeout> | null = null;
-let lastActivityMs = 0; // timestamp of last user message or agent reply
-let replying = false;
-
-async function loadWakeSchedule(): Promise<WakeSchedule | null> {
-  try {
-    const text = await Deno.readTextFile(WAKE_FILE);
-    return JSON.parse(text) as WakeSchedule;
-  } catch {
-    return null;
-  }
-}
-
-async function clearWakeFile(): Promise<void> {
-  try {
-    await Deno.remove(WAKE_FILE);
-  } catch {
-    // Already gone — fine
-  }
-}
-
-function scheduleWake(): void {
-  if (wakeTimer) {
-    clearTimeout(wakeTimer);
-    wakeTimer = null;
-  }
-
-  loadWakeSchedule().then((schedule) => {
-    if (!schedule) return;
-
-    const wakeAt = new Date(schedule.wakeAt).getTime();
-    const delay = Math.max(0, wakeAt - Date.now());
-
-    // Ensure we don't fire during or immediately after a conversation.
-    // If the wake time has passed but conversation is recent, defer until
-    // the quiet period elapses.
-    const quietUntil = lastActivityMs + WAKE_QUIET_PERIOD_MS;
-    const effectiveDelay = Math.max(delay, quietUntil - Date.now());
-
-    if (effectiveDelay <= 0) {
-      console.log(`[wake] firing now: ${schedule.reason}`);
-      wake(schedule.reason);
-      return;
-    }
-
-    console.log(`[wake] scheduled in ${Math.round(effectiveDelay / 60000)}m: ${schedule.reason}`);
-    wakeTimer = setTimeout(() => {
-      wakeTimer = null;
-      // Re-check quiet period — new activity may have happened while we waited
-      const sinceLastActivity = Date.now() - lastActivityMs;
-      if (replying || sinceLastActivity < WAKE_QUIET_PERIOD_MS) {
-        console.log(`[wake] conversation active, deferring`);
-        scheduleWake(); // re-schedule, will defer again
-        return;
-      }
-      wake(schedule.reason);
-    }, effectiveDelay);
-  });
-}
-
-async function wake(reason: string): Promise<void> {
-  console.log(`[wake] waking: ${reason}`);
-  await clearWakeFile();
-
-  const systemText = `⏰ Wake: ${reason}`;
-  await server.sendSystemMessage(DEFAULT_CONVERSATION, systemText);
-
-  try {
-    replying = true;
-    await reply(DEFAULT_CONVERSATION, systemText);
-  } catch (err) {
-    console.error("wake reply error:", err);
-    await server.sendMessage(DEFAULT_CONVERSATION, "(error during wake)");
-  } finally {
-    replying = false;
-    lastActivityMs = Date.now();
-  }
-
-  // Agent may have scheduled a new wake during its response
-  scheduleWake();
-}
-
-// Streaming reply loop
-async function reply(conversationId: string, userText: string) {
-  // Build LLM messages from stored history
+// reply fetches recent history for a conversation, runs the agent's
+// tool-calling loop, and sends the final response back through the server.
+async function reply(conversationId: string): Promise<void> {
   const history = await server.getHistory(conversationId, 100);
-  const llmMessages: Message[] = [
-    { role: "system", content: SYSTEM_PROMPT + "\n\n" + TOOLS_PROMPT },
-    ...history.map((m) => {
-      const role = (m.role === "agent" ? "assistant" : "user") as "assistant" | "user";
-      if (m.role === "agent") {
-        return { role, content: m.content };
-      }
-      const time = new Date(m.createdAt).toLocaleString("en-GB", {
-        weekday: "short", day: "numeric", month: "short",
-        hour: "2-digit", minute: "2-digit", timeZone: "Europe/London",
-      });
-      const prefix = m.role === "system" ? `[system @ ${time}]` : `[${time}]`;
-      return { role, content: `${prefix} ${m.content}` };
-    }),
-  ];
-
-  // The latest user message is already in history (stored by ConnectionManager),
-  // but we need to make sure it's included in the LLM context.
-  // If the last message in history isn't the user's latest, append it.
-  // Compare against the raw history (before timestamp prefixes) to avoid false mismatches.
-  const lastRaw = history[history.length - 1];
-  if (!lastRaw || lastRaw.role !== "user" || lastRaw.content !== userText) {
-    const time = new Date().toLocaleString("en-GB", {
-      weekday: "short", day: "numeric", month: "short",
-      hour: "2-digit", minute: "2-digit", timeZone: "Europe/London",
-    });
-    llmMessages.push({ role: "user", content: `[${time}] ${userText}` });
-  }
-
-  let finalText = "";
-
-  for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
-    const stream = await openai.chat.completions.create({
-      model: MODEL,
-      messages: llmMessages,
-      tools: [RUN_TOOL],
-      stream: true,
-    });
-
-    // Accumulate the response
-    let contentAccum = "";
-    const toolCallAccum: Map<number, {
-      id: string;
-      name: string;
-      arguments: string;
-    }> = new Map();
-    let messageId: string | null = null;
-    let hasToolCalls = false;
-
-    for await (const chunk of stream) {
-      const delta = chunk.choices[0]?.delta;
-      if (!delta) continue;
-
-      // Stream text content
-      if (delta.content) {
-        if (!messageId) {
-          messageId = await server.allocateAgentMessage(conversationId);
-        }
-        contentAccum += delta.content;
-        server.sendToken(messageId, delta.content);
-      }
-
-      // Accumulate tool call deltas
-      if (delta.tool_calls) {
-        hasToolCalls = true;
-        for (const tc of delta.tool_calls) {
-          const existing = toolCallAccum.get(tc.index);
-          if (existing) {
-            if (tc.function?.arguments) existing.arguments += tc.function.arguments;
-          } else {
-            toolCallAccum.set(tc.index, {
-              id: tc.id ?? "",
-              name: tc.function?.name ?? "",
-              arguments: tc.function?.arguments ?? "",
-            });
-          }
-        }
-      }
-    }
-
-    // If we got tool calls, execute them and loop
-    if (hasToolCalls && toolCallAccum.size > 0) {
-      // Build the assistant message with tool_calls
-      const toolCalls = [...toolCallAccum.values()].map((tc) => ({
-        id: tc.id,
-        type: "function" as const,
-        function: { name: tc.name, arguments: tc.arguments },
-      }));
-
-      const assistantMsg: Message = {
-        role: "assistant",
-        content: contentAccum || null,
-        tool_calls: toolCalls,
-      };
-      llmMessages.push(assistantMsg);
-
-      // Execute each tool call
-      for (const tc of toolCalls) {
-        let parsed: Record<string, unknown>;
-        try {
-          parsed = JSON.parse(tc.function.arguments);
-        } catch {
-          parsed = {};
-        }
-        const toolName = parsed.name as string ?? tc.function.name;
-        const toolArgs = (parsed.args as Record<string, unknown>) ?? {};
-        console.log(`  [tool] ${toolName}(${JSON.stringify(toolArgs)})`);
-
-        let result: string;
-        try {
-          result = await callTool(toolName, toolArgs);
-        } catch (err) {
-          result = `error: ${err instanceof Error ? err.message : String(err)}`;
-        }
-        console.log(`  [tool] → ${result.slice(0, 200)}`);
-
-        llmMessages.push({
-          role: "tool",
-          tool_call_id: tc.id,
-          content: result,
-        });
-      }
-
-      continue; // next round
-    }
-
-    // No tool calls — finalize the text response
-    finalText = contentAccum || "(no response)";
-    if (messageId) {
-      await server.finalizeMessage(messageId, finalText);
-    } else {
-      // No tokens were streamed (shouldn't happen, but handle it)
-      await server.sendMessage(conversationId, finalText);
-    }
-    break;
-  }
-
-  if (!finalText) {
-    finalText = "(max tool rounds reached)";
-    await server.sendMessage(conversationId, finalText);
-  }
-
-  console.log(`  ↳ ${finalText.slice(0, 100)}${finalText.length > 100 ? "..." : ""}`);
+  const messages = buildLLMMessages(history);
+  const text = await agentReply(agent, messages);
+  await server.sendMessage(conversationId, text);
+  console.log(`  ↳ ${text.slice(0, 100)}${text.length > 100 ? "..." : ""}`);
 }
 
-// Wire up the message handler
+const wake = createWakeScheduler({
+  quietPeriodMs: 30_000,
+  async readSchedule() {
+    try {
+      return JSON.parse(await Deno.readTextFile(WAKE_FILE));
+    } catch {
+      return null;
+    }
+  },
+  async clearSchedule() {
+    try {
+      await Deno.remove(WAKE_FILE);
+    } catch { /* already gone */ }
+  },
+  async onWake(reason) {
+    await server.sendSystemMessage(DEFAULT_CONVERSATION, `⏰ Wake: ${reason}`);
+    try {
+      await reply(DEFAULT_CONVERSATION);
+    } catch (err) {
+      console.error("wake reply error:", err);
+      await server.sendMessage(DEFAULT_CONVERSATION, "(error during wake)");
+    }
+  },
+});
+
 server.onUserMessage(async (msg) => {
   console.log(`[user] ${msg.text}`);
-  lastActivityMs = Date.now();
-  replying = true;
+  wake.onActivity();
+  wake.setReplying(true);
   try {
-    await reply(msg.conversationId, msg.text);
+    await reply(msg.conversationId);
   } catch (err) {
     console.error("reply error:", err);
     await server.sendMessage(msg.conversationId, "(error processing message)");
   } finally {
-    replying = false;
-    lastActivityMs = Date.now();
+    wake.setReplying(false);
+    wake.onActivity();
   }
-  // Agent may have scheduled a wake during its response
-  scheduleWake();
+  wake.check();
 });
 
 // Check for pending wake on startup
-scheduleWake();
+wake.check();
 
 console.log("bot is online! waiting for messages...");

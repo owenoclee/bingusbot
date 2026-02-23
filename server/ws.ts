@@ -11,9 +11,6 @@ export class ConnectionManager {
   private onMessage: ((msg: { conversationId: string; text: string }) => void) | null = null;
   private onPushToken: ((token: string) => void) | null = null;
 
-  // Track in-flight streaming messages so we can send frames
-  private activeMessages = new Map<string, { conversationId: string }>();
-
   constructor(opts: { authToken: string; store: MessageStore }) {
     this.authToken = opts.authToken;
     this.store = opts.store;
@@ -120,13 +117,4 @@ export class ConnectionManager {
     }
   }
 
-  /** Register an active streaming message */
-  trackMessage(messageId: string, conversationId: string) {
-    this.activeMessages.set(messageId, { conversationId });
-  }
-
-  /** Remove a streaming message from tracking */
-  untrackMessage(messageId: string) {
-    this.activeMessages.delete(messageId);
-  }
 }
