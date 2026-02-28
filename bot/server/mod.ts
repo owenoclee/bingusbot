@@ -1,28 +1,31 @@
 import { ensureDir } from "https://deno.land/std@0.224.0/fs/ensure_dir.ts";
-import type { APNsConfig, ServerInterface, StoredMessage } from "./types.ts";
-import { MessageStore } from "./messages.ts";
+import type { APNsConfig, ServerInterface } from "./types.ts";
+import type { InboxStore } from "../inbox.ts";
+import type { Gate } from "../utils/gate.ts";
 import { ConnectionManager } from "./ws.ts";
 import { APNsClient } from "./apns.ts";
-
-const DEFAULT_CONVERSATION = "default";
 
 export async function createServer(opts: {
   port: number;
   authToken: string;
-  dbPath: string;
+  inbox: InboxStore;
+  gate: Gate;
   apns?: APNsConfig;
+  dataDir: string;
+  onUserMessage?: (text: string) => void;
 }): Promise<ServerInterface> {
-  // Ensure data directory exists
-  const dataDir = opts.dbPath.replace(/\/[^/]+$/, "");
-  await ensureDir(dataDir);
+  await ensureDir(opts.dataDir);
 
-  const store = new MessageStore(opts.dbPath);
-  const conn = new ConnectionManager({ authToken: opts.authToken, store });
+  const conn = new ConnectionManager({
+    authToken: opts.authToken,
+    inbox: opts.inbox,
+    gate: opts.gate,
+  });
 
   // APNs (optional)
   let apns: APNsClient | null = null;
   if (opts.apns) {
-    apns = new APNsClient(opts.apns, dataDir);
+    apns = new APNsClient(opts.apns, opts.dataDir);
     conn.setOnPushToken((token) => apns!.setDeviceToken(token));
   }
 
@@ -33,9 +36,8 @@ export async function createServer(opts: {
     }
   };
 
-  // User message callback
-  let userMessageCallback: ((msg: { conversationId: string; text: string }) => void) | null = null;
-  conn.setOnMessage((msg) => userMessageCallback?.(msg));
+  // User message callback (for wake activity tracking etc.)
+  conn.setOnMessage((text) => opts.onUserMessage?.(text));
 
   // Start HTTP server
   Deno.serve({ port: opts.port }, (req) => {
@@ -52,7 +54,8 @@ export async function createServer(opts: {
         return new Response("unauthorized", { status: 401 });
       }
       return req.json().then((body: { text: string }) => {
-        server.sendMessage(DEFAULT_CONVERSATION, body.text);
+        const msg = opts.inbox.append("assistant", body.text);
+        server.deliver(msg);
         return new Response("ok");
       });
     }
@@ -73,41 +76,26 @@ export async function createServer(opts: {
 
   console.log(`server listening on :${opts.port}`);
 
-  // Build the ServerInterface
   const server: ServerInterface = {
-    onUserMessage(cb) {
-      userMessageCallback = cb;
-    },
-
-    async sendMessage(conversationId: string, text: string) {
-      const id = crypto.randomUUID();
-      const msg: StoredMessage = {
-        id,
-        conversationId,
+    deliver(msg) {
+      conn.send({
+        type: "message",
+        id: msg.id,
         role: "agent",
-        content: text,
-        createdAt: Date.now(),
-      };
-      store.insert(msg);
-      conn.send({ type: "message", id, role: "agent", content: text, createdAt: msg.createdAt });
-      pushIfDisconnected(text);
+        content: msg.content,
+        createdAt: msg.createdAt,
+      });
+      pushIfDisconnected(msg.content);
     },
 
-    async sendSystemMessage(conversationId: string, text: string) {
-      const id = crypto.randomUUID();
-      const msg: StoredMessage = {
-        id,
-        conversationId,
+    deliverSystem(msg) {
+      conn.send({
+        type: "message",
+        id: msg.id,
         role: "system",
-        content: text,
-        createdAt: Date.now(),
-      };
-      store.insert(msg);
-      conn.send({ type: "message", id, role: "system", content: text, createdAt: msg.createdAt });
-    },
-
-    async getHistory(conversationId: string, limit?: number): Promise<StoredMessage[]> {
-      return store.getHistory(conversationId, limit);
+        content: msg.content,
+        createdAt: msg.createdAt,
+      });
     },
   };
 

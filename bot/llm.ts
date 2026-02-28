@@ -23,10 +23,9 @@ export function createOpenRouterLLM(apiKey: string, model: string): LLM {
       });
 
       const choice = res.choices[0];
-      if (!choice) return { type: "text", content: "(no response)" };
+      if (!choice) throw new Error("no response from LLM complete");
 
       const msg = choice.message;
-
       if (msg.tool_calls && msg.tool_calls.length > 0) {
         const calls = msg.tool_calls.map((tc) => {
           let parsed: Record<string, unknown>;
