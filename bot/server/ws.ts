@@ -1,5 +1,6 @@
 import type { ClientFrame, ServerFrame, StoredMessage } from "./types.ts";
-import type { MessageStore } from "./messages.ts";
+import type { InboxStore } from "../inbox.ts";
+import type { Gate } from "../utils/gate.ts";
 
 const DEFAULT_CONVERSATION = "default";
 
@@ -7,20 +8,22 @@ export class ConnectionManager {
   private socket: WebSocket | null = null;
   private authenticated = false;
   private authToken: string;
-  private store: MessageStore;
-  private onMessage: ((msg: { conversationId: string; text: string }) => void) | null = null;
+  private inbox: InboxStore;
+  private gate: Gate;
+  private onMessage: ((text: string) => void) | null = null;
   private onPushToken: ((token: string) => void) | null = null;
 
-  constructor(opts: { authToken: string; store: MessageStore }) {
+  constructor(opts: { authToken: string; inbox: InboxStore; gate: Gate }) {
     this.authToken = opts.authToken;
-    this.store = opts.store;
+    this.inbox = opts.inbox;
+    this.gate = opts.gate;
   }
 
   get isConnected(): boolean {
     return this.socket !== null && this.authenticated;
   }
 
-  setOnMessage(cb: (msg: { conversationId: string; text: string }) => void) {
+  setOnMessage(cb: (text: string) => void) {
     this.onMessage = cb;
   }
 
@@ -73,15 +76,8 @@ export class ConnectionManager {
 
       case "message": {
         if (!this.authenticated) return;
-        // Store user message
-        const msg: StoredMessage = {
-          id: crypto.randomUUID(),
-          conversationId: DEFAULT_CONVERSATION,
-          role: "user",
-          content: frame.text,
-          createdAt: Date.now(),
-        };
-        this.store.insert(msg);
+        // Persist to user inbox
+        const msg = this.inbox.append("user", frame.text);
         // Echo back to client
         this.send({
           type: "message",
@@ -90,14 +86,26 @@ export class ConnectionManager {
           content: msg.content,
           createdAt: msg.createdAt,
         });
-        // Notify bot
-        this.onMessage?.({ conversationId: DEFAULT_CONVERSATION, text: frame.text });
+        // Notify bot + callback
+        this.onMessage?.(frame.text);
+        this.gate.open();
         break;
       }
 
       case "sync": {
         if (!this.authenticated) return;
-        const messages = this.store.getAfter(DEFAULT_CONVERSATION, frame.after);
+        // Only sync user-visible inboxes
+        const rows = this.inbox.readAfter(
+          ["user", "assistant", "system"],
+          frame.after,
+        );
+        const messages: StoredMessage[] = rows.map((r) => ({
+          id: r.id,
+          conversationId: DEFAULT_CONVERSATION,
+          role: r.inbox === "assistant" ? "agent" as const : r.inbox as "user" | "system",
+          content: r.content,
+          createdAt: r.createdAt,
+        }));
         this.send({ type: "sync_response", messages });
         break;
       }

@@ -15,3 +15,9 @@ app/constants/config.ts
 
 # APNs keys
 *.p8
+
+# Dagger (generated)
+.dagger/dagger.gen.go
+.dagger/internal/
+.dagger/go.mod
+.dagger/go.sum

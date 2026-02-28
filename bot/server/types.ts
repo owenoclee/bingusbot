@@ -7,18 +7,12 @@ export interface StoredMessage {
   createdAt: number; // unix ms
 }
 
-// Incoming user message (from WS)
-export interface IncomingMessage {
-  conversationId: string;
-  text: string;
-}
-
-// Server interface — the clean boundary the bot consumes
+// Server interface — the clean boundary the bot consumes.
+// Messages are already persisted to inboxes before reaching the server;
+// deliver/deliverSystem only handle WS delivery and push notifications.
 export interface ServerInterface {
-  onUserMessage(cb: (msg: IncomingMessage) => void): void;
-  sendMessage(conversationId: string, text: string): Promise<void>;
-  sendSystemMessage(conversationId: string, text: string): Promise<void>;
-  getHistory(conversationId: string, limit?: number): Promise<StoredMessage[]>;
+  deliver(msg: { id: string; content: string; createdAt: number }): void;
+  deliverSystem(msg: { id: string; content: string; createdAt: number }): void;
 }
 
 // --- WebSocket protocol frames ---
