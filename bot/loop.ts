@@ -14,7 +14,7 @@ export function createAgentLoop(deps: {
   tools: ToolRunner;
   toolDefs: ToolDef[];
   systemPrompt: string;
-  buildContext: (inbox: InboxStore) => Message[];
+  buildContext: (inbox: InboxStore) => { messages: Message[]; hasDeferred: boolean };
   onAssistantMessage: (msg: InboxMessage) => void;
 }): { start(): void } {
   return {
@@ -24,7 +24,7 @@ export function createAgentLoop(deps: {
           await deps.gate.wait();
 
           try {
-            const messages = deps.buildContext(deps.inbox);
+            const { messages, hasDeferred } = deps.buildContext(deps.inbox);
             const result = await deps.llm.complete(
               [{ role: "system", content: deps.systemPrompt }, ...messages],
               deps.toolDefs,
@@ -35,6 +35,9 @@ export function createAgentLoop(deps: {
               const msg = deps.inbox.append("assistant", text);
               deps.onAssistantMessage(msg);
               console.log(`  ↳ ${text.slice(0, 100)}${text.length > 100 ? "..." : ""}`);
+              // If messages were deferred during a tool exchange, re-open the
+              // gate so they are processed now that we've responded.
+              if (hasDeferred) deps.gate.open();
               continue;
             }
 

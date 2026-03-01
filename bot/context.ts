@@ -18,16 +18,23 @@ export interface MessageAnnotation {
   deferredBy?: string;   // tool-calls row ID that triggered deferral
 }
 
-// Build the LLM context from all inboxes, sorted by timestamp.
+// Build the LLM context from all inboxes, sorted by ID.
 //
-// User/system messages that arrive mid-tool-exchange (timestamp between a
-// tool-calls row and its tool-results) are deferred until after the last
-// result. This is a real scenario: a tool can take seconds, during which the
-// user sends a message whose created_at sorts between the two.
-export function buildContextWithAnnotations(inbox: InboxStore): MessageAnnotation[] {
+// User/system messages that arrive mid-tool-exchange are deferred until the
+// assistant has responded to the tool results. This avoids presenting the
+// model with a tool-result and a new user message simultaneously before it
+// has had a chance to close out the tool exchange.
+//
+// hasDeferred is true when messages are waiting to be flushed (i.e. a
+// tool exchange completed but no assistant response has been stored yet).
+// The loop uses this to re-open the gate after storing the text response.
+export function buildContextWithAnnotations(inbox: InboxStore): {
+  annotations: MessageAnnotation[];
+  hasDeferred: boolean;
+} {
   const rows = inbox.read(ALL_INBOXES);
   const annotations: MessageAnnotation[] = [];
-  const deferred: Array<{ ann: MessageAnnotation; deferredBy: string }> = [];
+  const deferred: Array<{ ann: MessageAnnotation }> = [];
   let pendingResults = 0;
   let currentToolCallsId = "";
 
@@ -44,19 +51,21 @@ export function buildContextWithAnnotations(inbox: InboxStore): MessageAnnotatio
         annotations.push({ message: msg, sourceId: row.id, sourceInbox: row.inbox, deferred: false });
       }
       pendingResults = Math.max(0, pendingResults - 1);
-      if (pendingResults === 0 && deferred.length > 0) {
-        for (const { ann } of deferred.splice(0)) {
-          annotations.push(ann);
-        }
-        currentToolCallsId = "";
-      }
     } else if (pendingResults > 0 && (row.inbox === "user" || row.inbox === "system")) {
       for (const msg of mapToMessages(row)) {
         deferred.push({
           ann: { message: msg, sourceId: row.id, sourceInbox: row.inbox, deferred: true, deferredBy: currentToolCallsId },
-          deferredBy: currentToolCallsId,
         });
       }
+    } else if (row.inbox === "assistant" && pendingResults === 0 && deferred.length > 0) {
+      // Flush deferred messages after the assistant has responded to the tool exchange
+      for (const msg of mapToMessages(row)) {
+        annotations.push({ message: msg, sourceId: row.id, sourceInbox: row.inbox, deferred: false });
+      }
+      for (const { ann } of deferred.splice(0)) {
+        annotations.push(ann);
+      }
+      currentToolCallsId = "";
     } else {
       for (const msg of mapToMessages(row)) {
         annotations.push({ message: msg, sourceId: row.id, sourceInbox: row.inbox, deferred: false });
@@ -64,17 +73,13 @@ export function buildContextWithAnnotations(inbox: InboxStore): MessageAnnotatio
     }
   }
 
-  // Flush any remaining deferred messages (tool results never came)
-  for (const { ann } of deferred) {
-    annotations.push(ann);
-  }
-
-  return annotations;
+  return { annotations, hasDeferred: deferred.length > 0 };
 }
 
-// Build the LLM context from all inboxes, sorted by timestamp.
-export function buildContext(inbox: InboxStore): Message[] {
-  return buildContextWithAnnotations(inbox).map((a) => a.message);
+// Build the LLM context from all inboxes, sorted by ID.
+export function buildContext(inbox: InboxStore): { messages: Message[]; hasDeferred: boolean } {
+  const { annotations, hasDeferred } = buildContextWithAnnotations(inbox);
+  return { messages: annotations.map((a) => a.message), hasDeferred };
 }
 
 function mapToMessages(row: InboxMessage): Message[] {

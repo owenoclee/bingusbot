@@ -23,10 +23,13 @@ const html = await Deno.readTextFile(
 
 // ── Context builder registry ──
 
-type ContextBuilder = (inbox: InboxStore) => { builder: string; messages: MessageAnnotation[] };
+type ContextBuilder = (inbox: InboxStore) => { builder: string; messages: MessageAnnotation[]; hasDeferred: boolean };
 
 const contextBuilders: Record<string, ContextBuilder> = {
-  default: (inbox) => ({ builder: "default", messages: buildContextWithAnnotations(inbox) }),
+  default: (inbox) => {
+    const { annotations, hasDeferred } = buildContextWithAnnotations(inbox);
+    return { builder: "default", messages: annotations, hasDeferred };
+  },
 };
 
 Deno.serve({ port: PORT }, async (req) => {
