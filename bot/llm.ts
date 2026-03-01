@@ -6,8 +6,6 @@ import OpenAI from "https://deno.land/x/openai@v4.69.0/mod.ts";
 import type { LLM, LLMResult, Message, ToolDef } from "./agent.ts";
 
 // createOpenRouterLLM returns an LLM backed by the OpenRouter API.
-// Tool calls are unwrapped from the single "run" wrapper so the caller
-// sees individual tool names and arguments.
 export function createOpenRouterLLM(apiKey: string, model: string): LLM {
   const client = new OpenAI({
     baseURL: "https://openrouter.ai/api/v1",
@@ -28,17 +26,13 @@ export function createOpenRouterLLM(apiKey: string, model: string): LLM {
       const msg = choice.message;
       if (msg.tool_calls && msg.tool_calls.length > 0) {
         const calls = msg.tool_calls.map((tc) => {
-          let parsed: Record<string, unknown>;
+          let args: Record<string, unknown>;
           try {
-            parsed = JSON.parse(tc.function.arguments);
+            args = JSON.parse(tc.function.arguments);
           } catch {
-            parsed = {};
+            args = {};
           }
-          return {
-            id: tc.id,
-            name: (parsed.name as string) ?? tc.function.name,
-            args: (parsed.args as Record<string, unknown>) ?? {},
-          };
+          return { id: tc.id, name: tc.function.name, args };
         });
         return { type: "tool_calls", content: msg.content ?? null, calls };
       }
