@@ -1,7 +1,6 @@
 import { ensureDir } from "https://deno.land/std@0.224.0/fs/ensure_dir.ts";
 import type { APNsConfig, ServerInterface } from "./types.ts";
 import type { InboxStore } from "../inbox.ts";
-import type { Gate } from "../utils/gate.ts";
 import { ConnectionManager } from "./ws.ts";
 import { APNsClient } from "./apns.ts";
 
@@ -9,7 +8,6 @@ export async function createServer(opts: {
   port: number;
   authToken: string;
   inbox: InboxStore;
-  gate: Gate;
   apns?: APNsConfig;
   dataDir: string;
   onUserMessage?: (text: string) => void;
@@ -19,7 +17,6 @@ export async function createServer(opts: {
   const conn = new ConnectionManager({
     authToken: opts.authToken,
     inbox: opts.inbox,
-    gate: opts.gate,
   });
 
   // APNs (optional)

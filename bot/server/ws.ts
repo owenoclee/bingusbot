@@ -1,6 +1,5 @@
 import type { ClientFrame, ServerFrame, StoredMessage } from "./types.ts";
 import type { InboxStore } from "../inbox.ts";
-import type { Gate } from "../utils/gate.ts";
 
 const DEFAULT_CONVERSATION = "default";
 
@@ -9,14 +8,12 @@ export class ConnectionManager {
   private authenticated = false;
   private authToken: string;
   private inbox: InboxStore;
-  private gate: Gate;
   private onMessage: ((text: string) => void) | null = null;
   private onPushToken: ((token: string) => void) | null = null;
 
-  constructor(opts: { authToken: string; inbox: InboxStore; gate: Gate }) {
+  constructor(opts: { authToken: string; inbox: InboxStore }) {
     this.authToken = opts.authToken;
     this.inbox = opts.inbox;
-    this.gate = opts.gate;
   }
 
   get isConnected(): boolean {
@@ -88,7 +85,6 @@ export class ConnectionManager {
         });
         // Notify bot + callback
         this.onMessage?.(frame.text);
-        this.gate.open();
         break;
       }
 

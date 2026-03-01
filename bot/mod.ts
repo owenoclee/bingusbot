@@ -23,7 +23,8 @@ import { createWakeScheduler } from "./wake.ts";
 const WAKE_FILE = `${BINGUS_DIR}/wake.json`;
 const dataDir = DB_PATH.replace(/\/[^/]+$/, "");
 
-const inbox = new InboxStore(DB_PATH);
+// Active inboxes: writes to these trigger the agent loop.
+const ACTIVE_INBOXES = new Set(["user", "system"]);
 
 const gate = new Gate({
   onOpen() {
@@ -36,11 +37,16 @@ const gate = new Gate({
   },
 });
 
+const inbox = new InboxStore(DB_PATH, {
+  onChange(name) {
+    if (ACTIVE_INBOXES.has(name)) gate.open();
+  },
+});
+
 const server = await createServer({
   port: WS_PORT,
   authToken: WS_AUTH_TOKEN,
   inbox,
-  gate,
   apns: APNS_CONFIG,
   dataDir,
   onUserMessage(text) {
@@ -66,7 +72,6 @@ const wake = createWakeScheduler({
   async onWake(reason) {
     const msg = inbox.append("system", `⏰ Wake: ${reason}`);
     server.deliverSystem(msg);
-    gate.open();
   },
 });
 
