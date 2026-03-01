@@ -1,9 +1,7 @@
 // Debug server — serves the debug UI and provides REST endpoints for
 // reading/writing the bot's SQLite inbox directly.
 
-import { Database } from "jsr:@db/sqlite@0.12";
 import { InboxStore } from "../bot/inbox.ts";
-import { generateId } from "../bot/utils/id.ts";
 import { buildContextWithAnnotations, type MessageAnnotation } from "../bot/context.ts";
 
 const DB_PATH = Deno.env.get("DB_PATH") ??
@@ -12,14 +10,20 @@ const WS_AUTH_TOKEN = Deno.env.get("WS_AUTH_TOKEN") ?? "";
 const WS_PORT = Deno.env.get("WS_PORT") ?? "8421";
 const PORT = Number(Deno.env.get("DEBUG_PORT") ?? "3000");
 
-const db = new Database(DB_PATH, { readonly: false });
-
-// Ensure WAL mode for safe concurrent access with the bot process
-db.exec("PRAGMA journal_mode=WAL");
-
 const html = await Deno.readTextFile(
   new URL("./index.html", import.meta.url).pathname,
 );
+
+// Open a fresh InboxStore for each request so stale file handles are never
+// an issue (e.g. after rm ~/.bingus/messages.db + bot restart).
+function withInbox<T>(fn: (inbox: InboxStore) => T): T {
+  const inbox = new InboxStore(DB_PATH);
+  try {
+    return fn(inbox);
+  } finally {
+    inbox.close();
+  }
+}
 
 // ── Context builder registry ──
 
@@ -37,7 +41,6 @@ Deno.serve({ port: PORT }, async (req) => {
 
   // Serve the UI
   if (url.pathname === "/") {
-    // Inject config into the HTML
     const injected = html.replace(
       "/*__CONFIG__*/",
       `window.__CONFIG__ = ${JSON.stringify({ wsAuthToken: WS_AUTH_TOKEN, wsPort: WS_PORT })};`,
@@ -49,38 +52,22 @@ Deno.serve({ port: PORT }, async (req) => {
 
   // GET /api/inboxes — list distinct inbox names
   if (url.pathname === "/api/inboxes" && req.method === "GET") {
-    const rows = db
-      .prepare("SELECT DISTINCT inbox FROM inbox_messages ORDER BY inbox")
-      .all() as Array<{ inbox: string }>;
-    return Response.json(rows.map((r) => r.inbox));
+    return Response.json(withInbox((inbox) => inbox.listInboxes()));
   }
 
   // GET /api/messages?inbox=...&after=...&limit=...
   // after is a string row ID ("" = from start)
   if (url.pathname === "/api/messages" && req.method === "GET") {
-    const inbox = url.searchParams.get("inbox"); // null = all
+    const inboxName = url.searchParams.get("inbox");
     const after = url.searchParams.get("after") ?? "";
     const limit = Number(url.searchParams.get("limit") ?? "500");
 
-    let raw;
-    if (inbox) {
-      raw = db
-        .prepare(
-          `SELECT id, inbox, content FROM inbox_messages
-           WHERE inbox = ? AND id > ?
-           ORDER BY id ASC LIMIT ?`,
-        )
-        .all(inbox, after, limit) as Array<{ id: string; inbox: string; content: string }>;
-    } else {
-      raw = db
-        .prepare(
-          `SELECT id, inbox, content FROM inbox_messages
-           WHERE id > ?
-           ORDER BY id ASC LIMIT ?`,
-        )
-        .all(after, limit) as Array<{ id: string; inbox: string; content: string }>;
-    }
-    return Response.json(raw);
+    const rows = withInbox((inbox) =>
+      inboxName
+        ? inbox.readAfter([inboxName], after).slice(0, limit)
+        : inbox.readAll(after, limit)
+    );
+    return Response.json(rows);
   }
 
   // POST /api/messages — insert arbitrary inbox data
@@ -89,12 +76,8 @@ Deno.serve({ port: PORT }, async (req) => {
     if (!body.inbox || body.content === undefined) {
       return Response.json({ error: "inbox and content required" }, { status: 400 });
     }
-    const id = generateId();
-    db.exec(
-      `INSERT INTO inbox_messages (id, inbox, content) VALUES (?, ?, ?)`,
-      [id, body.inbox, body.content],
-    );
-    return Response.json({ id, inbox: body.inbox, content: body.content });
+    const msg = withInbox((inbox) => inbox.append(body.inbox, body.content));
+    return Response.json({ id: msg.id, inbox: msg.inbox, content: msg.content });
   }
 
   // GET /api/context?builder=default
@@ -104,13 +87,7 @@ Deno.serve({ port: PORT }, async (req) => {
     if (!builder) {
       return Response.json({ error: `unknown builder: ${builderName}` }, { status: 400 });
     }
-    const inbox = new InboxStore(DB_PATH);
-    try {
-      const result = builder(inbox);
-      return Response.json(result);
-    } finally {
-      inbox.close();
-    }
+    return Response.json(withInbox(builder));
   }
 
   return new Response("not found", { status: 404 });
