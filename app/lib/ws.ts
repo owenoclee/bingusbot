@@ -29,7 +29,7 @@ function startHeartbeat() {
     if (socket && socket.readyState === WebSocket.OPEN) {
       // WebSocket ping frames are handled at protocol level,
       // but we send a sync as a keep-alive / missed message check
-      const lastSeen = useChatStore.getState().getLastSeenTimestamp();
+      const lastSeen = useChatStore.getState().getLastSeenId();
       send({ type: "sync", after: lastSeen });
     }
   }, 30000);
@@ -69,7 +69,7 @@ export function connect() {
           send({ type: "register_push", deviceToken: pendingPushToken });
         }
         // Sync missed messages
-        const lastSeen = useChatStore.getState().getLastSeenTimestamp();
+        const lastSeen = useChatStore.getState().getLastSeenId();
         send({ type: "sync", after: lastSeen });
         return;
       }

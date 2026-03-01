@@ -21,7 +21,7 @@ export interface ServerInterface {
 export type ClientFrame =
   | { type: "auth"; token: string }
   | { type: "message"; text: string }
-  | { type: "sync"; after: number } // unix ms — request missed messages
+  | { type: "sync"; after: string } // inbox row ID — request messages after this ID ("")= from start)
   | { type: "register_push"; deviceToken: string };
 
 // Server → Client

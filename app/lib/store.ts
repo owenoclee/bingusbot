@@ -16,7 +16,7 @@ interface ChatState {
   setConnected: (connected: boolean) => void;
   addMessage: (msg: ChatMessage) => void;
   handleFrame: (frame: ServerFrame) => void;
-  getLastSeenTimestamp: () => number;
+  getLastSeenId: () => string;
 }
 
 export const useChatStore = create<ChatState>((set, get) => ({
@@ -104,9 +104,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
   },
 
-  getLastSeenTimestamp: () => {
+  getLastSeenId: () => {
     const msgs = get().messages;
-    if (msgs.length === 0) return 0;
-    return msgs[msgs.length - 1].createdAt;
+    if (msgs.length === 0) return "";
+    return msgs[msgs.length - 1].id;
   },
 }));
