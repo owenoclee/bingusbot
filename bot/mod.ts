@@ -16,32 +16,13 @@ import { createServer } from "./server/mod.ts";
 import { createOpenRouterLLM } from "./llm.ts";
 import { InboxStore } from "./inbox.ts";
 import { createAgentLoop } from "./loop.ts";
-import { Gate } from "./utils/gate.ts";
 import { buildContext } from "./context.ts";
 import { createWakeScheduler } from "./wake.ts";
 
 const WAKE_FILE = `${BINGUS_DIR}/wake.json`;
 const dataDir = DB_PATH.replace(/\/[^/]+$/, "");
 
-// Active inboxes: writes to these trigger the agent loop.
-const ACTIVE_INBOXES = new Set(["user", "system"]);
-
-const gate = new Gate({
-  onOpen() {
-    wake.setReplying(true);
-  },
-  onClose() {
-    wake.setReplying(false);
-    wake.onActivity();
-    wake.check();
-  },
-});
-
-const inbox = new InboxStore(DB_PATH, {
-  onChange(name) {
-    if (ACTIVE_INBOXES.has(name)) gate.open();
-  },
-});
+const inbox = new InboxStore(DB_PATH);
 
 const server = await createServer({
   port: WS_PORT,
@@ -77,7 +58,7 @@ const wake = createWakeScheduler({
 
 const loop = createAgentLoop({
   inbox,
-  gate,
+  triggers: ["user", "system"],
   llm: createOpenRouterLLM(OPENROUTER_KEY, MODEL),
   tools: { call: callTool },
   toolDefs: [RUN_TOOL],
@@ -86,6 +67,8 @@ const loop = createAgentLoop({
   onAssistantMessage(msg) {
     server.deliver(msg);
   },
+  onActive() { wake.setReplying(true); },
+  onIdle() { wake.setReplying(false); wake.onActivity(); wake.check(); },
 });
 
 loop.start();
