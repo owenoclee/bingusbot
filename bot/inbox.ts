@@ -14,11 +14,12 @@ export interface InboxMessage {
 
 export class InboxStore {
   private db: Database;
-  private onChange?: (inbox: string) => void;
 
-  constructor(dbPath: string, opts?: { onChange?: (inbox: string) => void }) {
+  // Called after every append. Assign this to subscribe to inbox writes.
+  onChange?: (inbox: string) => void;
+
+  constructor(dbPath: string) {
     this.db = new Database(dbPath);
-    this.onChange = opts?.onChange;
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS inbox_messages (
         id TEXT PRIMARY KEY,
