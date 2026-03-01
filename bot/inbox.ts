@@ -14,9 +14,11 @@ export interface InboxMessage {
 
 export class InboxStore {
   private db: Database;
+  private onChange?: (inbox: string) => void;
 
-  constructor(dbPath: string) {
+  constructor(dbPath: string, opts?: { onChange?: (inbox: string) => void }) {
     this.db = new Database(dbPath);
+    this.onChange = opts?.onChange;
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS inbox_messages (
         id TEXT PRIMARY KEY,
@@ -34,7 +36,9 @@ export class InboxStore {
       `INSERT INTO inbox_messages (id, inbox, content) VALUES (?, ?, ?)`,
       [id, inbox, content],
     );
-    return { id, inbox, content, createdAt: idToMs(id) };
+    const msg: InboxMessage = { id, inbox, content, createdAt: idToMs(id) };
+    this.onChange?.(inbox);
+    return msg;
   }
 
   read(inboxes: string[]): InboxMessage[] {
