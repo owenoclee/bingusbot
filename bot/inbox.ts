@@ -20,6 +20,7 @@ export class InboxStore {
 
   constructor(dbPath: string) {
     this.db = new Database(dbPath);
+    this.db.exec("PRAGMA journal_mode=WAL");
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS inbox_messages (
         id TEXT PRIMARY KEY,
@@ -71,6 +72,29 @@ export class InboxStore {
       inbox: string;
       content: string;
     }>;
+
+    return rows.map((r) => ({
+      id: r.id,
+      inbox: r.inbox,
+      content: r.content,
+      createdAt: idToMs(r.id),
+    }));
+  }
+
+  listInboxes(): string[] {
+    const rows = this.db.prepare(
+      "SELECT DISTINCT inbox FROM inbox_messages ORDER BY inbox",
+    ).all() as Array<{ inbox: string }>;
+    return rows.map((r) => r.inbox);
+  }
+
+  readAll(after: string, limit: number): InboxMessage[] {
+    const rows = this.db.prepare(
+      `SELECT id, inbox, content
+       FROM inbox_messages
+       WHERE id > ?
+       ORDER BY id ASC LIMIT ?`,
+    ).all(after, limit) as Array<{ id: string; inbox: string; content: string }>;
 
     return rows.map((r) => ({
       id: r.id,
