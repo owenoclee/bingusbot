@@ -11,7 +11,7 @@ export interface StoredMessage {
 export type ClientFrame =
   | { type: "auth"; token: string }
   | { type: "message"; text: string }
-  | { type: "sync"; after: number }
+  | { type: "sync"; after: string }
   | { type: "register_push"; deviceToken: string };
 
 // Server → Client

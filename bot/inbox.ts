@@ -3,12 +3,13 @@
 // "tool-calls") and messages are ordered globally by timestamp.
 
 import { Database } from "jsr:@db/sqlite@0.12";
+import { generateId, idToMs } from "./utils/id.ts";
 
 export interface InboxMessage {
   id: string;
   inbox: string;
   content: string;
-  createdAt: number; // unix ms
+  createdAt: number; // unix ms, derived from id via idToMs()
 }
 
 export class InboxStore {
@@ -20,70 +21,57 @@ export class InboxStore {
       CREATE TABLE IF NOT EXISTS inbox_messages (
         id TEXT PRIMARY KEY,
         inbox TEXT NOT NULL,
-        content TEXT NOT NULL,
-        created_at INTEGER NOT NULL
+        content TEXT NOT NULL
       );
-      CREATE INDEX IF NOT EXISTS idx_inbox_time
-        ON inbox_messages (inbox, created_at ASC);
+      CREATE INDEX IF NOT EXISTS idx_inbox_id
+        ON inbox_messages (inbox, id ASC);
     `);
   }
 
   append(inbox: string, content: string): InboxMessage {
-    const msg: InboxMessage = {
-      id: crypto.randomUUID(),
-      inbox,
-      content,
-      createdAt: Date.now(),
-    };
+    const id = generateId();
     this.db.exec(
-      `INSERT INTO inbox_messages (id, inbox, content, created_at)
-       VALUES (?, ?, ?, ?)`,
-      [msg.id, msg.inbox, msg.content, msg.createdAt],
+      `INSERT INTO inbox_messages (id, inbox, content) VALUES (?, ?, ?)`,
+      [id, inbox, content],
     );
-    return msg;
+    return { id, inbox, content, createdAt: idToMs(id) };
   }
 
   read(inboxes: string[]): InboxMessage[] {
     const placeholders = inboxes.map(() => "?").join(", ");
     const rows = this.db.prepare(
-      `SELECT id, inbox, content, CAST(created_at AS TEXT) AS created_at
+      `SELECT id, inbox, content
        FROM inbox_messages
        WHERE inbox IN (${placeholders})
-       ORDER BY created_at ASC`,
-    ).all(...inboxes) as Array<{
-      id: string;
-      inbox: string;
-      content: string;
-      created_at: string;
-    }>;
+       ORDER BY id ASC`,
+    ).all(...inboxes) as Array<{ id: string; inbox: string; content: string }>;
 
     return rows.map((r) => ({
       id: r.id,
       inbox: r.inbox,
       content: r.content,
-      createdAt: Number(r.created_at),
+      createdAt: idToMs(r.id),
     }));
   }
 
-  readAfter(inboxes: string[], afterMs: number): InboxMessage[] {
+  readAfter(inboxes: string[], afterId: string): InboxMessage[] {
     const placeholders = inboxes.map(() => "?").join(", ");
     const rows = this.db.prepare(
-      `SELECT id, inbox, content, CAST(created_at AS TEXT) AS created_at
+      `SELECT id, inbox, content
        FROM inbox_messages
-       WHERE inbox IN (${placeholders}) AND created_at > ?
-       ORDER BY created_at ASC`,
-    ).all(...inboxes, afterMs) as Array<{
+       WHERE inbox IN (${placeholders}) AND id > ?
+       ORDER BY id ASC`,
+    ).all(...inboxes, afterId) as Array<{
       id: string;
       inbox: string;
       content: string;
-      created_at: string;
     }>;
 
     return rows.map((r) => ({
       id: r.id,
       inbox: r.inbox,
       content: r.content,
-      createdAt: Number(r.created_at),
+      createdAt: idToMs(r.id),
     }));
   }
 

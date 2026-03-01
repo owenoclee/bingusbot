@@ -2,6 +2,9 @@
 // reading/writing the bot's SQLite inbox directly.
 
 import { Database } from "jsr:@db/sqlite@0.12";
+import { InboxStore } from "../bot/inbox.ts";
+import { generateId } from "../bot/utils/id.ts";
+import { buildContextWithAnnotations, type MessageAnnotation } from "../bot/context.ts";
 
 const DB_PATH = Deno.env.get("DB_PATH") ??
   `${Deno.env.get("HOME")}/.bingus/messages.db`;
@@ -14,12 +17,17 @@ const db = new Database(DB_PATH, { readonly: false });
 // Ensure WAL mode for safe concurrent access with the bot process
 db.exec("PRAGMA journal_mode=WAL");
 
-// Cast created_at to text in queries to avoid int32 truncation of unix-ms timestamps.
-// The DB library returns JS numbers which lose precision above 2^31.
-
 const html = await Deno.readTextFile(
   new URL("./index.html", import.meta.url).pathname,
 );
+
+// ── Context builder registry ──
+
+type ContextBuilder = (inbox: InboxStore) => { builder: string; messages: MessageAnnotation[] };
+
+const contextBuilders: Record<string, ContextBuilder> = {
+  default: (inbox) => ({ builder: "default", messages: buildContextWithAnnotations(inbox) }),
+};
 
 Deno.serve({ port: PORT }, async (req) => {
   const url = new URL(req.url);
@@ -45,31 +53,31 @@ Deno.serve({ port: PORT }, async (req) => {
   }
 
   // GET /api/messages?inbox=...&after=...&limit=...
+  // after is a string row ID ("" = from start)
   if (url.pathname === "/api/messages" && req.method === "GET") {
     const inbox = url.searchParams.get("inbox"); // null = all
-    const after = Number(url.searchParams.get("after") ?? "0");
+    const after = url.searchParams.get("after") ?? "";
     const limit = Number(url.searchParams.get("limit") ?? "500");
 
     let raw;
     if (inbox) {
       raw = db
         .prepare(
-          `SELECT id, inbox, content, CAST(created_at AS TEXT) AS created_at FROM inbox_messages
-           WHERE inbox = ? AND created_at > ?
-           ORDER BY created_at ASC LIMIT ?`,
+          `SELECT id, inbox, content FROM inbox_messages
+           WHERE inbox = ? AND id > ?
+           ORDER BY id ASC LIMIT ?`,
         )
-        .all(inbox, after, limit) as Array<{ id: string; inbox: string; content: string; created_at: string }>;
+        .all(inbox, after, limit) as Array<{ id: string; inbox: string; content: string }>;
     } else {
       raw = db
         .prepare(
-          `SELECT id, inbox, content, CAST(created_at AS TEXT) AS created_at FROM inbox_messages
-           WHERE created_at > ?
-           ORDER BY created_at ASC LIMIT ?`,
+          `SELECT id, inbox, content FROM inbox_messages
+           WHERE id > ?
+           ORDER BY id ASC LIMIT ?`,
         )
-        .all(after, limit) as Array<{ id: string; inbox: string; content: string; created_at: string }>;
+        .all(after, limit) as Array<{ id: string; inbox: string; content: string }>;
     }
-    const rows = raw.map((r) => ({ ...r, created_at: Number(r.created_at) }));
-    return Response.json(rows);
+    return Response.json(raw);
   }
 
   // POST /api/messages — insert arbitrary inbox data
@@ -78,13 +86,28 @@ Deno.serve({ port: PORT }, async (req) => {
     if (!body.inbox || body.content === undefined) {
       return Response.json({ error: "inbox and content required" }, { status: 400 });
     }
-    const id = crypto.randomUUID();
-    const createdAt = Date.now();
+    const id = generateId();
     db.exec(
-      `INSERT INTO inbox_messages (id, inbox, content, created_at) VALUES (?, ?, ?, ?)`,
-      [id, body.inbox, body.content, createdAt],
+      `INSERT INTO inbox_messages (id, inbox, content) VALUES (?, ?, ?)`,
+      [id, body.inbox, body.content],
     );
-    return Response.json({ id, inbox: body.inbox, content: body.content, created_at: createdAt });
+    return Response.json({ id, inbox: body.inbox, content: body.content });
+  }
+
+  // GET /api/context?builder=default
+  if (url.pathname === "/api/context" && req.method === "GET") {
+    const builderName = url.searchParams.get("builder") ?? "default";
+    const builder = contextBuilders[builderName];
+    if (!builder) {
+      return Response.json({ error: `unknown builder: ${builderName}` }, { status: 400 });
+    }
+    const inbox = new InboxStore(DB_PATH);
+    try {
+      const result = builder(inbox);
+      return Response.json(result);
+    } finally {
+      inbox.close();
+    }
   }
 
   return new Response("not found", { status: 404 });
