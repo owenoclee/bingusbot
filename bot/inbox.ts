@@ -43,15 +43,14 @@ export class InboxStore {
     return msg;
   }
 
-  read(inboxes: string[], limit = 200): InboxMessage[] {
+  read(inboxes: string[]): InboxMessage[] {
     const placeholders = inboxes.map(() => "?").join(", ");
     const rows = this.db.prepare(
       `SELECT id, inbox, content, CAST(created_at AS TEXT) AS created_at
        FROM inbox_messages
        WHERE inbox IN (${placeholders})
-       ORDER BY created_at ASC
-       LIMIT ?`,
-    ).all(...inboxes, limit) as Array<{
+       ORDER BY created_at ASC`,
+    ).all(...inboxes) as Array<{
       id: string;
       inbox: string;
       content: string;

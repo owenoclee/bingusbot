@@ -5,6 +5,7 @@
 import type { InboxStore, InboxMessage } from "./inbox.ts";
 import type { LLM, Message, ToolDef, ToolRunner } from "./agent.ts";
 import type { Gate } from "./utils/gate.ts";
+import { encodeToolCalls, encodeToolResult } from "./codec.ts";
 
 export function createAgentLoop(deps: {
   inbox: InboxStore;
@@ -38,26 +39,23 @@ export function createAgentLoop(deps: {
             }
 
             // Persist tool calls
-            deps.inbox.append("tool-calls", JSON.stringify({
-              assistantContent: result.content,
-              calls: result.calls.map((c) => ({ id: c.id, name: c.name, args: c.args })),
-            }));
+            deps.inbox.append("tool-calls", encodeToolCalls(result.content, result.calls));
 
             // Execute each tool and persist results
             for (const tc of result.calls) {
-              console.log(`  [tool] ${tc.name}(${JSON.stringify(tc.args)})`);
+              // Unwrap the run() dispatch at execution time
+              const toolName = (tc.args.name as string) ?? tc.name;
+              const toolArgs = (tc.args.args as Record<string, unknown>) ?? {};
+              console.log(`  [tool] ${toolName}(${JSON.stringify(toolArgs)})`);
               let toolResult: string;
               try {
-                toolResult = await deps.tools.call(tc.name, tc.args);
+                toolResult = await deps.tools.call(toolName, toolArgs);
               } catch (err) {
                 toolResult = `error: ${err instanceof Error ? err.message : String(err)}`;
               }
               console.log(`  [tool] → ${toolResult.slice(0, 200)}`);
 
-              deps.inbox.append("tool-results", JSON.stringify({
-                callId: tc.id,
-                result: toolResult,
-              }));
+              deps.inbox.append("tool-results", encodeToolResult(tc.id, toolResult));
             }
 
             // Self-signal: tool results ready, loop again without closing
